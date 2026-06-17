@@ -4,6 +4,21 @@
 <dict>
 	<key>SchemeUserState</key>
 	<dict>
+		<key>Studio Watch App Watch App.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>4</integer>
+		</dict>
+		<key>StudioWatchComplicationExtension.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>3</integer>
+		</dict>
+		<key>studio watch app Watch App.xcscheme_^#shared#^_</key>
+		<dict>
+			<key>orderHint</key>
+			<integer>2</integer>
+		</dict>
 		<key>studio.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
@@ -23,6 +38,21 @@
 			<true/>
 		</dict>
 		<key>01BAB7E32FBDBDE8002D9CC4</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>01CF6C8A2FE54A9400C1B37C</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>01CF6CAF2FE54B4700C1B37C</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>01CF6CCA2FE54B8800C1B37C</key>
 		<dict>
 			<key>primary</key>
 			<true/>

@@ -10,6 +10,12 @@
 		01BAB7E72FBDBDEA002D9CC4 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BAB7E62FBDBDE9002D9CC4 /* WidgetKit.framework */; };
 		01BAB7E92FBDBDEA002D9CC4 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BAB7E82FBDBDEA002D9CC4 /* SwiftUI.framework */; };
 		01BAB7FA2FBDBDF0002D9CC4 /* widgetstudioExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 01BAB7E42FBDBDE8002D9CC4 /* widgetstudioExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		01CF6C3C2FE482A600C1B37C /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01CF6C3B2FE482A600C1B37C /* AppIntents.framework */; };
+		01CF6CDB2FE54BB200C1B37C /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BAB7E62FBDBDE9002D9CC4 /* WidgetKit.framework */; };
+		01CF6CDC2FE54BB200C1B37C /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 01BAB7E82FBDBDEA002D9CC4 /* SwiftUI.framework */; };
+		01CF6CEB2FE54BB300C1B37C /* StudioWatchComplicationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		01CF6D072FE5954B00C1B37C /* StudioIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01CF6D052FE5951C00C1B37C /* StudioIntents.swift */; };
+		01CF6D082FE5954B00C1B37C /* StudioIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01CF6D052FE5951C00C1B37C /* StudioIntents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -19,6 +25,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 01BAB7E32FBDBDE8002D9CC4;
 			remoteInfo = widgetstudioExtension;
+		};
+		01CF6CE92FE54BB300C1B37C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 01BAB7CA2FBDBD42002D9CC4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01CF6CD92FE54BB200C1B37C;
+			remoteInfo = StudioWatchComplicationExtension;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -34,6 +47,27 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		01CF6C992FE54A9700C1B37C /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01CF6CF02FE54BB300C1B37C /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				01CF6CEB2FE54BB300C1B37C /* StudioWatchComplicationExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +75,11 @@
 		01BAB7E42FBDBDE8002D9CC4 /* widgetstudioExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = widgetstudioExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		01BAB7E62FBDBDE9002D9CC4 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		01BAB7E82FBDBDEA002D9CC4 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		01CF6C3B2FE482A600C1B37C /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
+		01CF6CCB2FE54B8800C1B37C /* Studio Watch App Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Studio Watch App Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StudioWatchComplicationExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		01CF6CF22FE54D2C00C1B37C /* StudioWatchComplicationExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StudioWatchComplicationExtension.entitlements; sourceTree = "<group>"; };
+		01CF6D052FE5951C00C1B37C /* StudioIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioIntents.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -63,16 +102,43 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppConstants.swift,
-				"ContentView 3.swift",
+				StudioFocusFilterIntent.swift,
 			);
 			target = 01BAB7E32FBDBDE8002D9CC4 /* widgetstudioExtension */;
 		};
 		01BAB8312FBF19BF002D9CC4 /* Exceptions for "studio" folder in "studio" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				ActiveSessionWatchView.swift,
 				Info.plist,
+				WatchConnector.swift,
+				WatchContentView.swift,
 			);
 			target = 01BAB7D12FBDBD42002D9CC4 /* studio */;
+		};
+		01CF6CEC2FE54BB300C1B37C /* Exceptions for "StudioWatchComplication" folder in "StudioWatchComplicationExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */;
+		};
+		01CF6CFA2FE54DC600C1B37C /* Exceptions for "studio" folder in "Studio Watch App Watch App" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				ActiveSessionWatchView.swift,
+				StudioWatchShared.swift,
+				WatchConnector.swift,
+				WatchContentView.swift,
+			);
+			target = 01CF6CCA2FE54B8800C1B37C /* Studio Watch App Watch App */;
+		};
+		01CF6CFB2FE54DC600C1B37C /* Exceptions for "studio" folder in "StudioWatchComplicationExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				StudioWatchShared.swift,
+			);
+			target = 01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -82,6 +148,8 @@
 			exceptions = (
 				01BAB8312FBF19BF002D9CC4 /* Exceptions for "studio" folder in "studio" target */,
 				01BAB8032FBDC1E6002D9CC4 /* Exceptions for "studio" folder in "widgetstudioExtension" target */,
+				01CF6CFA2FE54DC600C1B37C /* Exceptions for "studio" folder in "Studio Watch App Watch App" target */,
+				01CF6CFB2FE54DC600C1B37C /* Exceptions for "studio" folder in "StudioWatchComplicationExtension" target */,
 			);
 			path = studio;
 			sourceTree = "<group>";
@@ -95,6 +163,19 @@
 			path = widgetstudio;
 			sourceTree = "<group>";
 		};
+		01CF6CCC2FE54B8800C1B37C /* Studio Watch App Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Studio Watch App Watch App";
+			sourceTree = "<group>";
+		};
+		01CF6CDD2FE54BB200C1B37C /* StudioWatchComplication */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				01CF6CEC2FE54BB300C1B37C /* Exceptions for "StudioWatchComplication" folder in "StudioWatchComplicationExtension" target */,
+			);
+			path = StudioWatchComplication;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +183,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01CF6C3C2FE482A600C1B37C /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,14 +196,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		01CF6CC82FE54B8800C1B37C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01CF6CD72FE54BB200C1B37C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01CF6CDC2FE54BB200C1B37C /* SwiftUI.framework in Frameworks */,
+				01CF6CDB2FE54BB200C1B37C /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		01BAB7C92FBDBD42002D9CC4 = {
 			isa = PBXGroup;
 			children = (
+				01CF6D052FE5951C00C1B37C /* StudioIntents.swift */,
+				01CF6CF22FE54D2C00C1B37C /* StudioWatchComplicationExtension.entitlements */,
 				01BAB7D42FBDBD42002D9CC4 /* studio */,
 				01BAB7EA2FBDBDEA002D9CC4 /* widgetstudio */,
+				01CF6CCC2FE54B8800C1B37C /* Studio Watch App Watch App */,
+				01CF6CDD2FE54BB200C1B37C /* StudioWatchComplication */,
 				01BAB7E52FBDBDE9002D9CC4 /* Frameworks */,
 				01BAB7D32FBDBD42002D9CC4 /* Products */,
 			);
@@ -132,6 +234,8 @@
 			children = (
 				01BAB7D22FBDBD42002D9CC4 /* studio.app */,
 				01BAB7E42FBDBDE8002D9CC4 /* widgetstudioExtension.appex */,
+				01CF6CCB2FE54B8800C1B37C /* Studio Watch App Watch App.app */,
+				01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,6 +243,7 @@
 		01BAB7E52FBDBDE9002D9CC4 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				01CF6C3B2FE482A600C1B37C /* AppIntents.framework */,
 				01BAB7E62FBDBDE9002D9CC4 /* WidgetKit.framework */,
 				01BAB7E82FBDBDEA002D9CC4 /* SwiftUI.framework */,
 			);
@@ -156,6 +261,7 @@
 				01BAB7CF2FBDBD42002D9CC4 /* Frameworks */,
 				01BAB7D02FBDBD42002D9CC4 /* Resources */,
 				01BAB7FF2FBDBDF0002D9CC4 /* Embed Foundation Extensions */,
+				01CF6C992FE54A9700C1B37C /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
@@ -194,6 +300,52 @@
 			productReference = 01BAB7E42FBDBDE8002D9CC4 /* widgetstudioExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		01CF6CCA2FE54B8800C1B37C /* Studio Watch App Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 01CF6CD32FE54B8A00C1B37C /* Build configuration list for PBXNativeTarget "Studio Watch App Watch App" */;
+			buildPhases = (
+				01CF6CC72FE54B8800C1B37C /* Sources */,
+				01CF6CC82FE54B8800C1B37C /* Frameworks */,
+				01CF6CC92FE54B8800C1B37C /* Resources */,
+				01CF6CF02FE54BB300C1B37C /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				01CF6CEA2FE54BB300C1B37C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				01CF6CCC2FE54B8800C1B37C /* Studio Watch App Watch App */,
+			);
+			name = "Studio Watch App Watch App";
+			packageProductDependencies = (
+			);
+			productName = "Studio Watch App Watch App";
+			productReference = 01CF6CCB2FE54B8800C1B37C /* Studio Watch App Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
+		01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 01CF6CED2FE54BB300C1B37C /* Build configuration list for PBXNativeTarget "StudioWatchComplicationExtension" */;
+			buildPhases = (
+				01CF6CD62FE54BB200C1B37C /* Sources */,
+				01CF6CD72FE54BB200C1B37C /* Frameworks */,
+				01CF6CD82FE54BB200C1B37C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				01CF6CDD2FE54BB200C1B37C /* StudioWatchComplication */,
+			);
+			name = StudioWatchComplicationExtension;
+			packageProductDependencies = (
+			);
+			productName = StudioWatchComplicationExtension;
+			productReference = 01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -201,14 +353,20 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2650;
-				LastUpgradeCheck = 2650;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					01BAB7D12FBDBD42002D9CC4 = {
 						CreatedOnToolsVersion = 26.5;
 					};
 					01BAB7E32FBDBDE8002D9CC4 = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					01CF6CCA2FE54B8800C1B37C = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					01CF6CD92FE54BB200C1B37C = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -228,6 +386,8 @@
 			targets = (
 				01BAB7D12FBDBD42002D9CC4 /* studio */,
 				01BAB7E32FBDBDE8002D9CC4 /* widgetstudioExtension */,
+				01CF6CCA2FE54B8800C1B37C /* Studio Watch App Watch App */,
+				01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -247,6 +407,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		01CF6CC92FE54B8800C1B37C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01CF6CD82FE54BB200C1B37C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -254,10 +428,26 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01CF6D072FE5954B00C1B37C /* StudioIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		01BAB7E02FBDBDE8002D9CC4 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				01CF6D082FE5954B00C1B37C /* StudioIntents.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01CF6CC72FE54B8800C1B37C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		01CF6CD62FE54BB200C1B37C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -271,6 +461,11 @@
 			isa = PBXTargetDependency;
 			target = 01BAB7E32FBDBDE8002D9CC4 /* widgetstudioExtension */;
 			targetProxy = 01BAB7F82FBDBDF0002D9CC4 /* PBXContainerItemProxy */;
+		};
+		01CF6CEA2FE54BB300C1B37C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */;
+			targetProxy = 01CF6CE92FE54BB300C1B37C /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -334,6 +529,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -391,6 +587,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -403,7 +600,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = studio/studio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = FC4758TVE2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -443,7 +640,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = studio/studio.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = FC4758TVE2;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -542,6 +739,146 @@
 			};
 			name = Release;
 		};
+		01CF6CD42FE54B8A00C1B37C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Studio Watch App Watch App/Studio Watch App Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FC4758TVE2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Studio Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "Politecnico-di-milano.studioso";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Politecnico-di-milano.studioso.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Debug;
+		};
+		01CF6CD52FE54B8A00C1B37C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Studio Watch App Watch App/Studio Watch App Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FC4758TVE2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Studio Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "Politecnico-di-milano.studioso";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Politecnico-di-milano.studioso.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Release;
+		};
+		01CF6CEE2FE54BB300C1B37C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = StudioWatchComplicationExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FC4758TVE2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = StudioWatchComplication/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StudioWatchComplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Politecnico-di-milano.studioso.watchkitapp.StudioWatchComplication";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		01CF6CEF2FE54BB300C1B37C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = StudioWatchComplicationExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FC4758TVE2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = StudioWatchComplication/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = StudioWatchComplication;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "Politecnico-di-milano.studioso.watchkitapp.StudioWatchComplication";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -568,6 +905,24 @@
 			buildConfigurations = (
 				01BAB7FD2FBDBDF0002D9CC4 /* Debug */,
 				01BAB7FE2FBDBDF0002D9CC4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		01CF6CD32FE54B8A00C1B37C /* Build configuration list for PBXNativeTarget "Studio Watch App Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01CF6CD42FE54B8A00C1B37C /* Debug */,
+				01CF6CD52FE54B8A00C1B37C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		01CF6CED2FE54BB300C1B37C /* Build configuration list for PBXNativeTarget "StudioWatchComplicationExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				01CF6CEE2FE54BB300C1B37C /* Debug */,
+				01CF6CEF2FE54BB300C1B37C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

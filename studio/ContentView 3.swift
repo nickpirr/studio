@@ -10,6 +10,7 @@
 //
 //  Created by Niccoló Pirronello on 20/05/26.
 //
+import AppIntents
 import UserNotifications
 import SwiftUI
 import ActivityKit
@@ -23,6 +24,7 @@ extension Date: Identifiable {
     public var id: TimeInterval { timeIntervalSince1970 }
 }
 // MARK: - PRESET PER ICONE E COLORI
+
 struct Presets {
     static let icons = [
         // Studio
@@ -130,7 +132,7 @@ import SwiftUI
 
 
 // MARK: - LOGICA DI SISTEMA (ViewModel)
-class StudyManager: ObservableObject {
+class StudyManager: NSObject, ObservableObject {
     @Published var courses: [StudyCourse] = [] {
         didSet { saveCourses(); saveCoursesForWidget() }
     }
@@ -140,18 +142,20 @@ class StudyManager: ObservableObject {
         didSet {
             saveSessions()
             recalculateMedalsRetroactively()
+            syncStateToWatch()
         }
     }
     
     // Vettore pubblicato per le medaglie
     @Published var medals: [StudyMedal] = []
 
-    init() {
+    override init() {
         self.courses = Self.load([StudyCourse].self, key: "savedCourses") ?? [
             StudyCourse(name: "Matematica", icon: "function", color: .blue, studyGoalHoursWeekly: 10),
             StudyCourse(name: "Storia", icon: "book.closed.fill", color: .orange, studyGoalHoursWeekly: 5)
         ]
         self.completedSessions = Self.load([CompletedSession].self, key: "savedSessions") ?? []
+        super.init()
         saveCoursesForWidget()
         
         loadMedals()
@@ -162,7 +166,8 @@ class StudyManager: ObservableObject {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
-
+   
+    
     private func save<T: Encodable>(_ value: T, key: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         UserDefaults.standard.set(data, forKey: key)
@@ -190,6 +195,7 @@ class StudyManager: ObservableObject {
               let data = try? JSONEncoder().encode(widgetCourses) else { return }
         defaults.set(data, forKey: "widgetCourses")
         WidgetCenter.shared.reloadAllTimelines()
+        syncStateToWatch()   // ← aggiungi questa riga
     }
     
     // MARK: - MOTORE MEDAGLIE E SFONDI (CORRETTO)
@@ -290,7 +296,115 @@ class StudyManager: ObservableObject {
         }
 
         if modified { saveMedals() }
+        
     }
+    func requestFocusActivation(for courseName: String) {
+            let intent = StudioFocusFilterIntent()
+            intent.courseName = courseName
+            Task {
+                try? await intent.donate()
+            }
+        }
+}
+import WatchConnectivity
+
+extension StudyManager: WCSessionDelegate {
+
+    func activateWatchConnectivity() {
+        guard WCSession.isSupported() else { return }
+        WCSession.default.delegate = self
+        WCSession.default.activate()
+    }
+
+    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
+        syncStateToWatch()
+    }
+
+    func sessionDidBecomeInactive(_ session: WCSession) {}
+    func sessionDidDeactivate(_ session: WCSession) { WCSession.default.activate() }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        DispatchQueue.main.async { self.handleWatchMessage(message) }
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        DispatchQueue.main.async { self.handleWatchMessage(userInfo) }
+    }
+
+    private func handleWatchMessage(_ message: [String: Any]) {
+        guard UserDefaults.standard.bool(forKey: "watchCompatibilityEnabled") else { return }
+        guard let action = message["action"] as? String else { return }
+        let defaults = WatchSync.defaults
+
+        switch action {
+        case "start":
+            guard let courseName = message["courseName"] as? String,
+                  let sessionID  = message["sessionID"] as? String,
+                  let startDate  = message["startDate"] as? Double else { return }
+
+            defaults?.set(courseName, forKey: WatchSync.keyCourseName)
+            defaults?.set(true,       forKey: WatchSync.keySessionActive)
+            defaults?.set(sessionID,  forKey: WatchSync.keySessionID)
+            defaults?.set(startDate,  forKey: WatchSync.keyStartDate)
+            defaults?.set(false,      forKey: WatchSync.keyIsPaused)
+            defaults?.set(0,          forKey: WatchSync.keyPausedSeconds)
+            defaults?.set(false,      forKey: WatchSync.keyStopRequested)
+
+            NotificationCenter.default.post(
+                name: .startSessionFromWatch, object: nil,
+                userInfo: ["courseName": courseName]
+            )
+
+        case "stop":
+            guard let sessionID = message["sessionID"] as? String else { return }
+            defaults?.set(true,      forKey: WatchSync.keyStopRequested)
+            defaults?.set(sessionID, forKey: WatchSync.keyStopSessionID)
+
+            if UIApplication.shared.applicationState != .active {
+                scheduleWatchStopNotification()
+            }
+
+        default: break
+        }
+    }
+
+    private func scheduleWatchStopNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Sessione interrotta"
+        content.body = "Hai fermato la sessione da Apple Watch. Tocca per terminarla."
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: "watchStopSession", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    // MARK: - Sincronizzazione iPhone → Watch (materie + grafico settimanale)
+    func syncStateToWatch() {
+        guard UserDefaults.standard.bool(forKey: "watchCompatibilityEnabled"),
+              WCSession.isSupported(), WCSession.default.activationState == .activated
+        else { return }
+
+        let watchCourses = courses.map { WatchCourseLite(name: $0.name, icon: $0.icon, colorName: $0.colorName) }
+        guard let coursesData = try? JSONEncoder().encode(watchCourses) else { return }
+
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let weeklyMinutes: [Int] = (0..<7).reversed().map { offset in
+            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { return 0 }
+            return completedSessions
+                .filter { cal.isDate($0.date, inSameDayAs: day) }
+                .reduce(0) { $0 + $1.minutes }
+        }
+
+        let context: [String: Any] = [
+            "courses": coursesData,
+            "weeklyMinutes": weeklyMinutes
+        ]
+        try? WCSession.default.updateApplicationContext(context)
+    }
+}
+
+extension Notification.Name {
+    static let startSessionFromWatch = Notification.Name("startSessionFromWatch")
 }
 // MARK: - STRUCT DI SUPPORTO
 struct PendingSession: Identifiable {
@@ -394,10 +508,17 @@ struct ContentView: View {
         .onAppear {
             checkPendingShortcut()
             attemptToResumeSession()
+            manager.activateWatchConnectivity()
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             checkPendingShortcut()
             attemptToResumeSession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .startSessionFromWatch)) { notification in
+            guard let courseName = notification.userInfo?["courseName"] as? String,
+                  let course = manager.courses.first(where: { $0.name == courseName })
+            else { return }
+            selectedCourse = course
         }
     }
         
@@ -838,13 +959,19 @@ struct MedalDetailSheet: View {
     }
 }
 
+
+// MARK: - RIEPILOGO
 struct SummaryView: View {
     @ObservedObject var manager: StudyManager
     @State private var period = "G"
     let periods = ["G", "S", "M", "A"]
 
     @State private var showingSettings = false
+    @State private var showingStudyDetail = false
+    @State private var showingGradesDetail = false
+    @State private var showingGoalsDetail = false
 
+    // MARK: - DATI GRAFICO PRINCIPALE (riusato nello sheet espanso "Materie")
     var chartData: [CompletedSession] {
         let cal = Calendar.current
         let now = Date()
@@ -948,20 +1075,51 @@ struct SummaryView: View {
         return h > 0 ? "\(h) h \(m) min" : "\(m) min"
     }
 
+    // MARK: - DATI VOTI (per periodo, riusato nello sheet espanso "Voti")
+    var gradesData: [CompletedSession] {
+        let cal = Calendar.current
+        let now = Date()
+        switch period {
+        case "G": return manager.completedSessions.filter { cal.isDateInToday($0.date) }
+        case "S":
+            guard let s = cal.dateInterval(of: .weekOfYear, for: now)?.start else { return [] }
+            return manager.completedSessions.filter { $0.date >= s }
+        case "M":
+            guard let s = cal.dateInterval(of: .month, for: now)?.start else { return [] }
+            return manager.completedSessions.filter { $0.date >= s }
+        case "A":
+            guard let s = cal.dateInterval(of: .year, for: now)?.start else { return [] }
+            return manager.completedSessions.filter { $0.date >= s }
+        default: return []
+        }
+    }
+
+    func average(_ values: [Int]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return Double(values.reduce(0, +)) / Double(values.count)
+    }
+
+    // MARK: - BODY
     var body: some View {
         NavigationView {
             ScrollView {
-                // SUDDIVISO IN SOTTO-VISTE PER NON FAR CRASHARE IL COMPILATORE
-                VStack(spacing: 20) {
-                    chartSection
-                    progressSection
+                VStack(spacing: 16) {
+                    HStack(spacing: 12) {
+                        weekStudyCardCompact
+                        weekGradesCardCompact
+                    }
+
+                    weekComparisonCard
+                    monthComparisonCard
+
+                    goalsCardCompact
                 }
                 .padding(.horizontal)
                 .padding(.top, 5)
             }
             .navigationTitle("Riepilogo")
             .toolbar {
-                ToolbarItem(placement:.navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         showingSettings = true
@@ -974,123 +1132,628 @@ struct SummaryView: View {
             .sheet(isPresented: $showingSettings) {
                 SettingsView(manager: manager)
             }
+            .sheet(isPresented: $showingStudyDetail) {
+                studyDetailExpanded
+            }
+            .sheet(isPresented: $showingGradesDetail) {
+                gradesDetailExpanded
+            }
+            .sheet(isPresented: $showingGoalsDetail) {
+                goalsDetailExpanded
+            }
         }
     }
 
-    // MARK: - SEZIONE GRAFICO ESTATTA
-    private var chartSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Periodo", selection: $period) {
-                ForEach(periods, id: \.self) { Text($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.bottom, 15)
+    // MARK: - BADGE TREND
+    private func trendBadge(deltaText: String, isUp: Bool) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: isUp ? "arrow.up.right" : "arrow.down.right")
+                .font(.system(size: 10, weight: .bold))
+            Text(deltaText)
+                .font(.caption2.weight(.bold))
+        }
+        .foregroundStyle(isUp ? .green : .orange)
+    }
 
-            Text(statTitle).font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-            Text(formatTimeText(statValue))
-                .font(.system(size: 32, design: .rounded).weight(.bold))
-                .padding(.bottom, 20)
+    // MARK: - CARD COMPATTA 1: MATERIE — ULTIMA SETTIMANA
+    private var weekStudyCardCompact: some View {
+        let cal = Calendar.current
+        let now = Date()
+        let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: now)) ?? now
+        let prevWeekStart = cal.date(byAdding: .day, value: -13, to: cal.startOfDay(for: now)) ?? now
+        let prevWeekEnd = weekStart
 
-            Chart {
-                ForEach(chartData) { session in
-                    let date = session.date
-                    let minutes = session.minutes
-                    let course = session.courseName
-                    
-                    switch period {
-                    case "G":
-                        BarMark(x: .value("Ora", date, unit: .hour), y: .value("Min", minutes))
-                            .foregroundStyle(by: .value("Materia", course))
-                    case "S", "M":
-                        BarMark(x: .value("Giorno", date, unit: .day), y: .value("Min", minutes))
-                            .foregroundStyle(by: .value("Materia", course))
-                    default:
-                        BarMark(x: .value("Mese", date, unit: .month), y: .value("Min", minutes))
-                            .foregroundStyle(by: .value("Materia", course))
+        let weekSessions = manager.completedSessions.filter { $0.date >= weekStart }
+        let prevWeekSessions = manager.completedSessions.filter { $0.date >= prevWeekStart && $0.date < prevWeekEnd }
+
+        let totalWeek = weekSessions.reduce(0) { $0 + $1.minutes }
+        let totalPrevWeek = prevWeekSessions.reduce(0) { $0 + $1.minutes }
+
+        let byCourse = Dictionary(grouping: weekSessions, by: { $0.courseName })
+            .mapValues { $0.reduce(0) { $0 + $1.minutes } }
+        let topCourseName = byCourse.max(by: { $0.value < $1.value })?.key
+
+        // Totale minuti per ciascuno dei 7 giorni — sempre 7 valori, anche a 0
+        let dailyTotals: [Int] = (0..<7).map { offset in
+            guard let day = cal.date(byAdding: .day, value: offset, to: weekStart) else { return 0 }
+            return weekSessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
+        }
+
+        let delta = totalWeek - totalPrevWeek
+        let percentChange: Double? = totalPrevWeek > 0 ? (Double(delta) / Double(totalPrevWeek)) * 100 : nil
+        let isUp = delta >= 0
+
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showingStudyDetail = true
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Materie", systemImage: "book.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(formatTimeText(totalWeek))
+                        .font(.system(size: 22, design: .rounded).weight(.bold))
+                        .foregroundStyle(.primary)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+
+                    if let percentChange = percentChange {
+                        trendBadge(deltaText: "\(isUp ? "+" : "")\(Int(percentChange))%", isUp: isUp)
                     }
                 }
-            }
-            .chartForegroundStyleScale(
-                domain: manager.courses.map { $0.name },
-                range: manager.courses.map { $0.color }
-            )
-            .chartXScale(domain: xDomain)
-            .chartYScale(domain: 0...maxY)
-            .chartYAxis {
-                AxisMarks(position: .trailing) { value in
-                    AxisGridLine()
-                    if let min = value.as(Int.self) {
-                        AxisValueLabel {
-                            if min == 0 { Text("0") }
-                            else if min >= 60 {
-                                let h = min / 60; let r = min % 60
-                                Text(r == 0 ? "\(h)h" : "\(h)h\(r)m")
-                            } else { Text("\(min)m") }
+
+                if let topCourseName = topCourseName {
+                    Text("Più studiata: \(topCourseName)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                if weekSessions.isEmpty {
+                    Text("Nessuna sessione questa settimana")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(height: 70)
+                } else {
+                    Chart {
+                        ForEach(Array(dailyTotals.enumerated()), id: \.offset) { index, minutes in
+                            BarMark(x: .value("Giorno", index), y: .value("Min", minutes))
+                                .foregroundStyle(.blue)
+                                .cornerRadius(3)
                         }
                     }
+                    .chartXScale(domain: -0.5...6.5)
+                    .chartXAxis(.hidden)
+                    .chartYAxis(.hidden)
+                    .frame(height: 70)
                 }
             }
-            .chartXAxis {
-                switch period {
-                case "G": AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisValueLabel(format: .dateTime.hour()); AxisGridLine() }
-                case "S": AxisMarks(values: .stride(by: .day, count: 1)) { _ in AxisValueLabel(format: .dateTime.weekday(.narrow)); AxisGridLine() }
-                case "M": AxisMarks(values: .stride(by: .day, count: 7)) { _ in AxisValueLabel(format: .dateTime.day()); AxisGridLine() }
-                case "A": AxisMarks(values: .stride(by: .month, count: 1)) { _ in AxisValueLabel(format: .dateTime.month(.narrow)); AxisGridLine() }
-                default: AxisMarks()
-                }
-            }
-            .frame(height: 200)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
 
-            let periodTotals = Dictionary(grouping: chartData, by: { $0.courseName })
-                .mapValues { $0.reduce(0) { $0 + $1.minutes } }
-            if !periodTotals.isEmpty {
-                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 15) {
-                    ForEach(manager.courses) { course in
-                        if let total = periodTotals[course.name], total > 0 {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(course.name).font(.caption.bold()).foregroundColor(course.color)
-                                Text(formatTimeText(total)).font(.caption)
+    // MARK: - CARD COMPATTA 2: VOTI — ULTIMA SETTIMANA
+    private var weekGradesCardCompact: some View {
+        let cal = Calendar.current
+        let now = Date()
+        let weekStart = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: now)) ?? now
+        let prevWeekStart = cal.date(byAdding: .day, value: -13, to: cal.startOfDay(for: now)) ?? now
+        let prevWeekEnd = weekStart
+
+        let weekSessions = manager.completedSessions.filter { $0.date >= weekStart }.sorted { $0.date < $1.date }
+        let prevWeekSessions = manager.completedSessions.filter { $0.date >= prevWeekStart && $0.date < prevWeekEnd }
+
+        let overallAverage = average(weekSessions.flatMap { [$0.effort, $0.concentration, $0.satisfaction] })
+        let prevAverage = average(prevWeekSessions.flatMap { [$0.effort, $0.concentration, $0.satisfaction] })
+
+        // Una media per ciascuno dei 7 giorni — sempre 7 valori (0 = nessuna sessione quel giorno)
+        let dailyAverages: [Double] = (0..<7).map { offset in
+            guard let day = cal.date(byAdding: .day, value: offset, to: weekStart) else { return 0 }
+            let daySessions = weekSessions.filter { cal.isDate($0.date, inSameDayAs: day) }
+            return average(daySessions.flatMap { [$0.effort, $0.concentration, $0.satisfaction] })
+        }
+        let daysWithData = dailyAverages.filter { $0 > 0 }
+
+        let avgEffort = average(weekSessions.map { $0.effort })
+        let avgConcentration = average(weekSessions.map { $0.concentration })
+        let avgSatisfaction = average(weekSessions.map { $0.satisfaction })
+        let topStrength = [("Impegno", avgEffort), ("Concentrazione", avgConcentration), ("Soddisfazione", avgSatisfaction)]
+            .max(by: { $0.1 < $1.1 })?.0
+
+        let delta = overallAverage - prevAverage
+        let hasPrev = !prevWeekSessions.isEmpty
+        let isUp = delta >= 0
+
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showingGradesDetail = true
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Voti", systemImage: "star.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if weekSessions.isEmpty {
+                        Text("—")
+                            .font(.system(size: 22, design: .rounded).weight(.bold))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(String(format: "%.1f / 10", overallAverage))
+                            .font(.system(size: 22, design: .rounded).weight(.bold))
+                            .foregroundStyle(.primary)
+                            .minimumScaleFactor(0.7)
+                            .lineLimit(1)
+                    }
+
+                    if hasPrev {
+                        trendBadge(deltaText: "\(isUp ? "+" : "")\(String(format: "%.1f", delta))", isUp: isUp)
+                    }
+                }
+
+                if let topStrength = topStrength, !weekSessions.isEmpty {
+                    Text("Punto forte: \(topStrength)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                if daysWithData.count < 2 {
+                    Text(weekSessions.isEmpty ? "Nessun voto questa settimana" : "Servono più giorni")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(height: 70)
+                } else {
+                    Chart {
+                        ForEach(Array(dailyAverages.enumerated()), id: \.offset) { index, value in
+                            if value > 0 {
+                                LineMark(x: .value("Giorno", index), y: .value("Media", value))
+                                    .foregroundStyle(.yellow)
+                                    .interpolationMethod(.catmullRom)
+                                PointMark(x: .value("Giorno", index), y: .value("Media", value))
+                                    .foregroundStyle(.yellow)
                             }
                         }
                     }
+                    .chartXScale(domain: -0.5...6.5)
+                    .chartXAxis(.hidden)
+                    .chartYAxis(.hidden)
+                    .chartYScale(domain: 0...10)
+                    .frame(height: 70)
                 }
-                .padding(.top, 15)
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
+        .buttonStyle(.plain)
     }
 
-    // MARK: - SEZIONE PROGRESSI ESTRATTA
-    private var progressSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if manager.courses.isEmpty {
-                Text("Nessuna materia registrata.").foregroundColor(.secondary)
-            } else {
-                let activeCourses = manager.courses.filter { course in
-                    course.studyGoalHoursWeekly != nil || totalMinutesToday(for: course.name) > 0
-                }
-                
-                if activeCourses.isEmpty {
-                    Text("Nessun dato o obiettivo per oggi.").foregroundColor(.secondary)
+    // MARK: - CONFRONTO SETTIMANALE
+    private var weekComparisonCard: some View {
+        let cal = Calendar.current
+        let now = Date()
+
+        var calMon = cal
+        calMon.firstWeekday = 2
+        let thisWeekStart = calMon.dateInterval(of: .weekOfYear, for: now)?.start ?? now
+        let daysSinceMonday = cal.dateComponents([.day], from: thisWeekStart, to: now).day ?? 0
+
+        let lastWeekStart = cal.date(byAdding: .day, value: -7, to: thisWeekStart) ?? now
+        let lastWeekEquivalentEnd = cal.date(byAdding: .day, value: daysSinceMonday + 1, to: lastWeekStart) ?? now
+
+        let thisWeekMinutes = manager.completedSessions
+            .filter { $0.date >= thisWeekStart && $0.date <= now }
+            .reduce(0) { $0 + $1.minutes }
+
+        let lastWeekMinutes = manager.completedSessions
+            .filter { $0.date >= lastWeekStart && $0.date < lastWeekEquivalentEnd }
+            .reduce(0) { $0 + $1.minutes }
+
+        let delta = thisWeekMinutes - lastWeekMinutes
+        let percentChange: Double? = lastWeekMinutes > 0
+            ? (Double(delta) / Double(lastWeekMinutes)) * 100
+            : nil
+        let isUp = delta >= 0
+
+        return HStack(spacing: 16) {
+            Image(systemName: isUp ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(isUp ? .green : .orange)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Rispetto alla scorsa settimana")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if let percentChange = percentChange {
+                    Text("\(isUp ? "+" : "")\(Int(percentChange))%  ·  \(formatTimeText(thisWeekMinutes)) finora")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.primary)
+                } else if thisWeekMinutes > 0 {
+                    Text("\(formatTimeText(thisWeekMinutes)) finora, nessun dato la scorsa settimana")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.primary)
                 } else {
-                    ForEach(activeCourses) { course in
-                        courseProgressRow(for: course)
+                    Text("Nessuna sessione questa settimana")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    // MARK: - CONFRONTO MENSILE
+    private var monthComparisonCard: some View {
+        let cal = Calendar.current
+        let now = Date()
+
+        let thisMonthStart = cal.dateInterval(of: .month, for: now)?.start ?? now
+        let daysSinceMonthStart = cal.dateComponents([.day], from: thisMonthStart, to: now).day ?? 0
+
+        let lastMonthStart = cal.date(byAdding: .month, value: -1, to: thisMonthStart) ?? now
+        let lastMonthEquivalentEnd = cal.date(byAdding: .day, value: daysSinceMonthStart + 1, to: lastMonthStart) ?? now
+
+        let thisMonthMinutes = manager.completedSessions
+            .filter { $0.date >= thisMonthStart && $0.date <= now }
+            .reduce(0) { $0 + $1.minutes }
+
+        let lastMonthMinutes = manager.completedSessions
+            .filter { $0.date >= lastMonthStart && $0.date < lastMonthEquivalentEnd }
+            .reduce(0) { $0 + $1.minutes }
+
+        let delta = thisMonthMinutes - lastMonthMinutes
+        let percentChange: Double? = lastMonthMinutes > 0
+            ? (Double(delta) / Double(lastMonthMinutes)) * 100
+            : nil
+        let isUp = delta >= 0
+
+        return HStack(spacing: 16) {
+            Image(systemName: isUp ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(isUp ? .green : .orange)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Rispetto al mese scorso")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if let percentChange = percentChange {
+                    Text("\(isUp ? "+" : "")\(Int(percentChange))%  ·  \(formatTimeText(thisMonthMinutes)) finora")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.primary)
+                } else if thisMonthMinutes > 0 {
+                    Text("\(formatTimeText(thisMonthMinutes)) finora, nessun dato il mese scorso")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.primary)
+                } else {
+                    Text("Nessuna sessione questo mese")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    // MARK: - CARD COMPATTA 3: OBIETTIVI (solo materie studiate oggi)
+    private var goalsCardCompact: some View {
+        let activeToday = manager.courses.filter { totalMinutesToday(for: $0.name) > 0 }
+
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showingGoalsDetail = true
+        } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Obiettivi", systemImage: "target")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+
+                if activeToday.isEmpty {
+                    Text("Nessuna materia studiata oggi")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    VStack(spacing: 10) {
+                        ForEach(activeToday) { course in
+                            compactGoalRow(for: course)
+                        }
                     }
                 }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
-        .padding()
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
+        .buttonStyle(.plain)
     }
 
-    // MARK: - FUNZIONI DI CALCOLO ESTERNE AL BODY
+    private func compactGoalRow(for course: StudyCourse) -> some View {
+        let studiedMinutesWeek = manager.minutesStudiedThisWeek(for: course.name)
+        let studiedHours = Double(studiedMinutesWeek) / 60.0
+        let goal = course.studyGoalHoursWeekly
+        let progress = goal != nil ? min(studiedHours / Double(goal!), 1.0) : 0
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(course.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                if let goal = goal {
+                    Text(String(format: "%.1f/%d h", studiedHours, goal))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(course.color)
+                } else {
+                    Text(formatTimeText(totalMinutesToday(for: course.name)))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(course.color)
+                }
+            }
+            if goal != nil {
+                GeometryReader { geo in
+                    Capsule().fill(Color.secondary.opacity(0.2))
+                        .overlay(
+                            Rectangle().fill(course.color).frame(width: geo.size.width * CGFloat(progress)),
+                            alignment: .leading
+                        )
+                        .clipShape(Capsule())
+                }
+                .frame(height: 6)
+            }
+        }
+    }
+
+    // MARK: - FUNZIONI DI CALCOLO
     private func totalMinutesToday(for courseName: String) -> Int {
         manager.completedSessions
             .filter { Calendar.current.isDateInToday($0.date) && $0.courseName == courseName }
             .reduce(0) { $0 + $1.minutes }
+    }
+
+    // MARK: - SHEET ESPANSO 1: MATERIE (grafico completo, tutti i periodi)
+    private var studyDetailExpanded: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Periodo", selection: $period) {
+                        ForEach(periods, id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.bottom, 15)
+
+                    Text(statTitle).font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
+                    Text(formatTimeText(statValue))
+                        .font(.system(size: 32, design: .rounded).weight(.bold))
+                        .padding(.bottom, 20)
+
+                    Chart {
+                        ForEach(chartData) { session in
+                            chartMark(for: session)
+                        }
+                    }
+                    .chartForegroundStyleScale(
+                        domain: manager.courses.map { $0.name },
+                        range: manager.courses.map { $0.color }
+                    )
+                    .chartXScale(domain: xDomain)
+                    .chartYScale(domain: 0...maxY)
+                    .chartYAxis {
+                        AxisMarks(position: .trailing) { value in
+                            AxisGridLine()
+                            if let min = value.as(Int.self) {
+                                AxisValueLabel {
+                                    if min == 0 { Text("0") }
+                                    else if min >= 60 {
+                                        let h = min / 60; let r = min % 60
+                                        Text(r == 0 ? "\(h)h" : "\(h)h\(r)m")
+                                    } else { Text("\(min)m") }
+                                }
+                            }
+                        }
+                    }
+                    .chartXAxis {
+                        switch period {
+                        case "G": AxisMarks(values: .stride(by: .hour, count: 6)) { _ in AxisValueLabel(format: .dateTime.hour()); AxisGridLine() }
+                        case "S": AxisMarks(values: .stride(by: .day, count: 1)) { _ in AxisValueLabel(format: .dateTime.weekday(.narrow)); AxisGridLine() }
+                        case "M": AxisMarks(values: .stride(by: .day, count: 7)) { _ in AxisValueLabel(format: .dateTime.day()); AxisGridLine() }
+                        case "A": AxisMarks(values: .stride(by: .month, count: 1)) { _ in AxisValueLabel(format: .dateTime.month(.narrow)); AxisGridLine() }
+                        default: AxisMarks()
+                        }
+                    }
+                    .frame(height: 200)
+
+                    let periodTotals = Dictionary(grouping: chartData, by: { $0.courseName })
+                        .mapValues { $0.reduce(0) { $0 + $1.minutes } }
+                    if !periodTotals.isEmpty {
+                        LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 15) {
+                            ForEach(manager.courses) { course in
+                                if let total = periodTotals[course.name], total > 0 {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(course.name).font(.caption.bold()).foregroundColor(course.color)
+                                        Text(formatTimeText(total)).font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 15)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Materie")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Chiudi") { showingStudyDetail = false }
+                }
+            }
+        }
+    }
+
+    @ChartContentBuilder
+    private func chartMark(for session: CompletedSession) -> some ChartContent {
+        let date = session.date
+        let minutes = session.minutes
+        let course = session.courseName
+
+        switch period {
+        case "G":
+            BarMark(x: .value("Ora", date, unit: .hour), y: .value("Min", minutes))
+                .foregroundStyle(by: .value("Materia", course))
+        case "S", "M":
+            BarMark(x: .value("Giorno", date, unit: .day), y: .value("Min", minutes))
+                .foregroundStyle(by: .value("Materia", course))
+        default:
+            BarMark(x: .value("Mese", date, unit: .month), y: .value("Min", minutes))
+                .foregroundStyle(by: .value("Materia", course))
+        }
+    }
+
+    // MARK: - SHEET ESPANSO 2: VOTI (generale, concentrazione, soddisfazione — tutti i periodi)
+    private var gradesDetailExpanded: some View {
+        let sessions = gradesData.sorted { $0.date < $1.date }
+        let avgEffort = average(sessions.map { $0.effort })
+        let avgConcentration = average(sessions.map { $0.concentration })
+        let avgSatisfaction = average(sessions.map { $0.satisfaction })
+        let avgOverall = average(sessions.flatMap { [$0.effort, $0.concentration, $0.satisfaction] })
+
+        return NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Periodo", selection: $period) {
+                        ForEach(periods, id: \.self) { Text($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.bottom, 15)
+
+                    Text("Voto medio generale").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
+                    Text(sessions.isEmpty ? "—" : String(format: "%.1f / 10", avgOverall))
+                        .font(.system(size: 32, design: .rounded).weight(.bold))
+                        .padding(.bottom, 20)
+
+                    if sessions.isEmpty {
+                        Text("Nessuna sessione in questo periodo.")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 40)
+                    } else {
+                        Chart {
+                            ForEach(Array(sessions.enumerated()), id: \.offset) { index, session in
+                                LineMark(x: .value("Sessione", index), y: .value("Impegno", session.effort))
+                                    .foregroundStyle(by: .value("Voto", "Impegno"))
+                                    .interpolationMethod(.catmullRom)
+                                LineMark(x: .value("Sessione", index), y: .value("Concentrazione", session.concentration))
+                                    .foregroundStyle(by: .value("Voto", "Concentrazione"))
+                                    .interpolationMethod(.catmullRom)
+                                LineMark(x: .value("Sessione", index), y: .value("Soddisfazione", session.satisfaction))
+                                    .foregroundStyle(by: .value("Voto", "Soddisfazione"))
+                                    .interpolationMethod(.catmullRom)
+                            }
+                        }
+                        .chartForegroundStyleScale([
+                            "Impegno": Color.orange,
+                            "Concentrazione": Color.green,
+                            "Soddisfazione": Color.blue
+                        ])
+                        .chartYScale(domain: 0...10)
+                        .chartXAxis(.hidden)
+                        .chartYAxis {
+                            AxisMarks(position: .trailing, values: [0, 2, 4, 6, 8, 10])
+                        }
+                        .frame(height: 200)
+
+                        HStack(spacing: 12) {
+                            gradeStatBox(title: "Impegno", value: avgEffort, color: .orange)
+                            gradeStatBox(title: "Concentrazione", value: avgConcentration, color: .green)
+                            gradeStatBox(title: "Soddisfazione", value: avgSatisfaction, color: .blue)
+                        }
+                        .padding(.top, 15)
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Voti")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Chiudi") { showingGradesDetail = false }
+                }
+            }
+        }
+    }
+
+    private func gradeStatBox(title: String, value: Double, color: Color, fullWidth: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(String(format: "%.1f", value))
+                .font(.system(size: 20, design: .rounded).weight(.bold))
+                .foregroundStyle(color)
+        }
+        .padding(12)
+        .frame(maxWidth: fullWidth ? .infinity : nil, alignment: .leading)
+        .frame(minWidth: fullWidth ? nil : 80)
+        .background(color.opacity(0.12))
+        .cornerRadius(14)
+    }
+
+    // MARK: - SHEET ESPANSO 3: OBIETTIVI (tutte le materie)
+    private var goalsDetailExpanded: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    if manager.courses.isEmpty {
+                        Text("Nessuna materia registrata.").foregroundColor(.secondary)
+                    } else {
+                        ForEach(manager.courses) { course in
+                            courseProgressRow(for: course)
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Obiettivi")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Chiudi") { showingGoalsDetail = false }
+                }
+            }
+        }
     }
 
     private func courseProgressRow(for course: StudyCourse) -> some View {
@@ -1736,6 +2399,11 @@ struct ActiveWorkoutView: View {
             guard !hasStartedThisView else { return }
             hasStartedThisView = true
             restoreOrStartSession()
+            Task {
+                var intent = StudioFocusFilterIntent()
+                intent.courseName = course.name
+                try? await intent.donate()
+            }
             if isFocusModeEnabled {
                 UIApplication.perform(NSSelectorFromString("sharedApplication"))?
                     .takeUnretainedValue()
@@ -3514,7 +4182,7 @@ struct EndSessionView: View {
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var manager: StudyManager // <--- AGGIUNGI QUESTA RIGA
+    @ObservedObject var manager: StudyManager
     
     var body: some View {
         NavigationView {
@@ -3522,8 +4190,9 @@ struct SettingsView: View {
                 Section {
                     SettingsRow(title: "Notifiche", icon: "bell.fill", color: .red, destination: NotificationsSettingsView())
                     SettingsRow(title: "Focus", icon: "flame.fill", color: .orange, destination: focusSettingsView())
-                    // AGGIORNA QUESTA RIGA: passa il manager
+         
                     SettingsRow(title: "Vista studio", icon: "stopwatch.fill", color: .blue, destination: StudySettingsView(manager: manager))
+                    SettingsRow(title: "Apple Watch", icon: "applewatch", color: .gray, destination: WatchSettingsView())
                 }
             }
             .navigationTitle("Impostazioni")
@@ -3539,13 +4208,44 @@ struct SettingsView: View {
         }
     }
 }
+struct WatchSettingsView: View {
+    @AppStorage("watchCompatibilityEnabled") private var watchCompatibilityEnabled = false
+
+    var body: some View {
+        List {
+            Section {
+                Toggle(isOn: $watchCompatibilityEnabled) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.gray)
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "applewatch")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        Text("Compatibilità Apple Watch")
+                            .font(.system(.body, design: .rounded))
+                    }
+                }
+                .tint(.green)
+            } footer: {
+                Text("Avvia, ferma e monitora le sessioni di studio direttamente da Apple Watch. Il timer si sincronizza automaticamente in entrambe le direzioni.")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("Apple Watch")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
 
 // MARK: - RIGA IMPOSTAZIONI STILE APPLE (AGGIORNATA)
 struct SettingsRow<Destination: View>: View {
     let title: String
     let icon: String
     let color: Color
-    let destination: Destination // Permette di passare qualsiasi View come destinazione
+    let destination: Destination
     
     var body: some View {
         NavigationLink(destination: destination) {
@@ -3701,39 +4401,67 @@ struct NotificationsSettingsView: View {
         }
     }
 }
-struct focusSettingsView: View{
-    @AppStorage("isFocusModeEnabled") private var focusIson: Bool = false
+struct focusSettingsView: View {
+    @Environment(\.openURL) var openURL
+    @AppStorage("focusModeAutoActivate") private var focusModeAutoActivate = false
+
     var body: some View {
-        ZStack {
-            // Sfondo standard del raggruppamento per far risaltare il liquid glass
-            List {
-                Section {
-                    Toggle(isOn: $focusIson) {
+        List {
+            // Sezione esistente — toggle Focus Mode
+            Section {
+                // ... il tuo toggle isFocusModeEnabled esistente
+            }
+
+            // NUOVA SEZIONE — Focus di sistema
+            Section {
+                Toggle(isOn: $focusModeAutoActivate) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.indigo)
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "moon.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        Text("Attiva Focus di sistema")
+                            .font(.system(.body, design: .rounded))
+                    }
+                }
+                .tint(.indigo)
+
+                if focusModeAutoActivate {
+                    Button {
+                        // Apre direttamente le impostazioni Focus del sistema
+                        if let url = URL(string: "App-prefs:FOCUS") {
+                            openURL(url)
+                        }
+                    } label: {
                         HStack(spacing: 14) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(.orange)
+                                    .fill(.gray.opacity(0.3))
                                     .frame(width: 32, height: 32)
-                                
-                                Image(systemName: "flame.fill")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.primary)
                             }
-                            
-                            Text("Modalità focus")
+                            Text("Configura Focus nelle Impostazioni")
                                 .font(.system(.body, design: .rounded))
+                                .foregroundColor(.primary)
                         }
                     }
-                    .tint(.green)
-                } footer: {
-                    Text("la modalità focus, se attiva,fa in modo che una sessione di studio venga interrotta al chiudersi dell'app, inoltre impedisce al dispositivo di andare in standby.  l'attivazione di questa funzione permette di ricevere premi dedicati ")
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundColor(.secondary)
+                    .buttonStyle(.plain)
                 }
+            } header: {
+                Text("Focus di sistema")
+            } footer: {
+                Text("Quando avvii una sessione, Studio suggerisce al sistema di attivare il Focus che hai associato all'app. Configura il Focus 'Studio' nelle Impostazioni di sistema e aggiungi Studio alle app consentite per abilitarlo.")
+                    .font(.system(.footnote, design: .rounded))
             }
-            .navigationTitle("focus")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationTitle("Focus")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 struct musicSeetingsView: View {
@@ -4095,12 +4823,6 @@ struct BackgroundPreviewCover: View {
         .environment(\.colorScheme, background.isLight ? .light : .dark)
     }
 }
-// MARK: - NOTIFICATION NAMES
-// Modello condiviso per i corsi nel Widget
-struct WidgetCourse: Codable, Identifiable {
-    var id: String { name }
-    let name: String
-    let icon: String
-    let colorName: String
-}
+import AppIntents
 
+// MARK: - ENTITÀ MATERIA
