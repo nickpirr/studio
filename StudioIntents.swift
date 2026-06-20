@@ -21,7 +21,33 @@ struct CourseEntity: AppEntity {
         DisplayRepresentation(title: LocalizedStringResource(stringLiteral: name))
     }
 }
+import WidgetKit
+import UserNotifications
 
+struct StopStudySessionIntent: AppIntent {
+    static var title: LocalizedStringResource = "Termina sessione di studio"
+    static var openAppWhenRun: Bool = false
+
+    func perform() async throws -> some IntentResult {
+        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let sessionID = defaults?.string(forKey: "sharedSessionID") ?? ""
+        defaults?.set(true, forKey: "sharedStopRequested")
+        defaults?.set(sessionID, forKey: "sharedStopSessionID")
+
+        let isForeground = defaults?.bool(forKey: "appIsForeground") ?? false
+        if !isForeground {
+            let content = UNMutableNotificationContent()
+            content.title = "Sessione interrotta"
+            content.body = "Tocca per terminarla e salvare i dettagli."
+            content.sound = .default
+            let request = UNNotificationRequest(identifier: "widgetStopSession", content: content, trigger: nil)
+            try? await UNUserNotificationCenter.current().add(request)
+        }
+
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
 struct CourseEntityQuery: AppIntents.EntityQuery {
     typealias Entity = CourseEntity
 

@@ -12,6 +12,6 @@ import SwiftUI
 struct StudioWatchComplicationBundle: WidgetBundle {
     var body: some Widget {
         StudioWatchComplication()
-        StudioWatchComplicationControl()
+        StudioQuickStartWatchComplication()
     }
 }

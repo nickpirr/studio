@@ -112,6 +112,9 @@
 			membershipExceptions = (
 				AppConstants.swift,
 				StudioFocusFilterIntent.swift,
+				StudioQuickStartWidget.swift,
+				StudioStatusWidget.swift,
+				StudioWeeklyWidget.swift,
 			);
 			target = 01BAB7E32FBDBDE8002D9CC4 /* widgetstudioExtension */;
 		};
@@ -120,8 +123,12 @@
 			membershipExceptions = (
 				ActiveSessionWatchView.swift,
 				Info.plist,
+				StudioQuickStartWidget.swift,
+				StudioStatusWidget.swift,
+				StudioWeeklyWidget.swift,
 				WatchConnector.swift,
 				WatchContentView.swift,
+				WatchSessionIntents.swift,
 			);
 			target = 01BAB7D12FBDBD42002D9CC4 /* studio */;
 		};
@@ -139,6 +146,7 @@
 				StudioWatchShared.swift,
 				WatchConnector.swift,
 				WatchContentView.swift,
+				WatchSessionIntents.swift,
 			);
 			target = 01CF6CCA2FE54B8800C1B37C /* Studio Watch App Watch App */;
 		};
@@ -146,6 +154,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				StudioWatchShared.swift,
+				WatchSessionIntents.swift,
 			);
 			target = 01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */;
 		};

@@ -14,5 +14,8 @@ struct widgetstudioBundle: WidgetBundle {
         widgetstudio()
         widgetstudioControl()
         widgetstudioLiveActivity()
+        StudioWeeklyWidget()
+        StudioQuickStartWidget()
+        StudioStatusWidget()
     }
 }

@@ -143,6 +143,7 @@ class StudyManager: NSObject, ObservableObject {
             saveSessions()
             recalculateMedalsRetroactively()
             syncStateToWatch()
+            saveWidgetWeeklyData()
         }
     }
     
@@ -197,7 +198,17 @@ class StudyManager: NSObject, ObservableObject {
         WidgetCenter.shared.reloadAllTimelines()
         syncStateToWatch()   // ← aggiungi questa riga
     }
-    
+    func saveWidgetWeeklyData() {
+        guard let defaults = UserDefaults(suiteName: "group.com.niccolo.studio") else { return }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let weekly: [Int] = (0..<7).reversed().map { offset in
+            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { return 0 }
+            return completedSessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
+        }
+        defaults.set(weekly, forKey: "weeklyMinutesByDay")
+        WidgetCenter.shared.reloadAllTimelines()
+    }
     // MARK: - MOTORE MEDAGLIE E SFONDI (CORRETTO)
     
     func loadMedals() {
@@ -437,7 +448,8 @@ struct ContentView: View {
     @State private var selectedCourse: StudyCourse?
     @State private var pendingSession: PendingSession?
     @State private var selectedTab = 0
-
+    @Environment(\.scenePhase) private var scenePhase
+    
     var body: some View {
         TabView(selection: $selectedTab) {
             SummaryView(manager: manager)
@@ -536,6 +548,9 @@ struct ContentView: View {
                   let course = manager.courses.first(where: { $0.name == courseName })
             else { return }
             selectedCourse = course
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            UserDefaults(suiteName: "group.com.niccolo.studio")?.set(newPhase == .active, forKey: "appIsForeground")
         }
     }
         

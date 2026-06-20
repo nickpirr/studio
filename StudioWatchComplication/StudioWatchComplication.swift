@@ -8,88 +8,123 @@
 import WidgetKit
 import SwiftUI
 
-struct Provider: AppIntentTimelineProvider {
-    func placeholder(in context: Context) -> SimpleEntry {
-        SimpleEntry(date: Date(), configuration: ConfigurationAppIntent())
-    }
-
-    func snapshot(for configuration: ConfigurationAppIntent, in context: Context) async -> SimpleEntry {
-        SimpleEntry(date: Date(), configuration: configuration)
-    }
-    
-    func timeline(for configuration: ConfigurationAppIntent, in context: Context) async -> Timeline<SimpleEntry> {
-        var entries: [SimpleEntry] = []
-
-        // Generate a timeline consisting of five entries an hour apart, starting from the current date.
-        let currentDate = Date()
-        for hourOffset in 0 ..< 5 {
-            let entryDate = Calendar.current.date(byAdding: .hour, value: hourOffset, to: currentDate)!
-            let entry = SimpleEntry(date: entryDate, configuration: configuration)
-            entries.append(entry)
-        }
-
-        return Timeline(entries: entries, policy: .atEnd)
-    }
-
-    func recommendations() -> [AppIntentRecommendation<ConfigurationAppIntent>] {
-        // Create an array with all the preconfigured widgets to show.
-        [AppIntentRecommendation(intent: ConfigurationAppIntent(), description: "Example Widget")]
-    }
-
-//    func relevances() async -> WidgetRelevances<ConfigurationAppIntent> {
-//        // Generate a list containing the contexts this widget is relevant in.
-//    }
-}
-
-struct SimpleEntry: TimelineEntry {
+struct StudioComplicationEntry: TimelineEntry {
     let date: Date
-    let configuration: ConfigurationAppIntent
+    let sessionActive: Bool
+    let courseName: String
+    let startDate: Date
+    let weeklyMinutes: [Int]
 }
 
-struct StudioWatchComplicationEntryView : View {
-    var entry: Provider.Entry
+struct StudioComplicationProvider: TimelineProvider {
+    func placeholder(in context: Context) -> StudioComplicationEntry {
+        StudioComplicationEntry(date: Date(), sessionActive: false, courseName: "", startDate: Date(), weeklyMinutes: [20, 40, 10, 60, 30, 0, 50])
+    }
+    func getSnapshot(in context: Context, completion: @escaping (StudioComplicationEntry) -> Void) {
+        completion(currentEntry())
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<StudioComplicationEntry>) -> Void) {
+        let nextUpdate = Calendar.current.date(byAdding: .minute, value: 15, to: Date()) ?? Date().addingTimeInterval(900)
+        completion(Timeline(entries: [currentEntry()], policy: .after(nextUpdate)))
+    }
+    private func currentEntry() -> StudioComplicationEntry {
+        let defaults = WatchSync.defaults
+        let active = defaults?.bool(forKey: WatchSync.keySessionActive) ?? false
+        let name = defaults?.string(forKey: WatchSync.keyCourseName) ?? ""
+        let startInterval = defaults?.double(forKey: WatchSync.keyStartDate) ?? 0
+        let start = startInterval > 0 ? Date(timeIntervalSince1970: startInterval) : Date()
+        let weekly = defaults?.array(forKey: WatchSync.keyWeeklyMinutes) as? [Int] ?? Array(repeating: 0, count: 7)
+        return StudioComplicationEntry(date: Date(), sessionActive: active, courseName: name, startDate: start, weeklyMinutes: weekly)
+    }
+}
+
+struct StudioComplicationView: View {
+    let entry: StudioComplicationEntry
+    @Environment(\.widgetFamily) var family
 
     var body: some View {
-        VStack {
-            HStack {
-                Text("Time:")
-                Text(entry.date, style: .time)
-            }
-        
-            Text("Favorite Emoji:")
-            Text(entry.configuration.favoriteEmoji)
+        switch family {
+        case .accessoryCircular:
+            circularView
+        case .accessoryCorner:
+            cornerView
+        case .accessoryInline:
+            inlineView
+        default:
+            rectangularView
         }
+    }
+
+    private var rectangularView: some View {
+        Group {
+            if entry.sessionActive {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.courseName).font(.caption2.weight(.semibold)).lineLimit(1)
+                    Text(entry.startDate, style: .timer).font(.title3.weight(.bold)).monospacedDigit()
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Questa settimana").font(.caption2.weight(.semibold))
+                    HStack(alignment: .bottom, spacing: 3) {
+                        ForEach(Array(entry.weeklyMinutes.enumerated()), id: \.offset) { _, minutes in
+                            let maxVal = max(entry.weeklyMinutes.max() ?? 1, 1)
+                            Capsule().fill(.blue).frame(width: 6, height: max(3, CGFloat(minutes) / CGFloat(maxVal) * 24))
+                        }
+                    }
+                    .frame(height: 24, alignment: .bottom)
+                }
+            }
+        }
+        .containerBackground(for: .widget) { Color.clear }
+    }
+
+    private var circularView: some View {
+        Group {
+            if entry.sessionActive {
+                VStack(spacing: 0) {
+                    Image(systemName: "play.fill").font(.caption2)
+                    Text(entry.startDate, style: .timer).font(.caption2).monospacedDigit().minimumScaleFactor(0.6)
+                }
+            } else {
+                Image(systemName: "book.fill").font(.title3)
+            }
+        }
+        .containerBackground(for: .widget) { Color.clear }
+    }
+
+    private var cornerView: some View {
+        Group {
+            if entry.sessionActive {
+                Text(entry.startDate, style: .timer)
+                    .font(.system(size: 14, weight: .bold))
+                    .monospacedDigit()
+            } else {
+                Image(systemName: "book.fill")
+            }
+        }
+        .containerBackground(for: .widget) { Color.clear }
+    }
+
+    private var inlineView: some View {
+        Group {
+            if entry.sessionActive {
+                Text("\(entry.courseName) · \(entry.startDate, style: .timer)")
+            } else {
+                Text("Studio: nessuna sessione")
+            }
+        }
+        .containerBackground(for: .widget) { Color.clear }
     }
 }
 
 struct StudioWatchComplication: Widget {
-    let kind: String = "StudioWatchComplication"
-
+    let kind = "StudioWatchComplication"
     var body: some WidgetConfiguration {
-        AppIntentConfiguration(kind: kind, intent: ConfigurationAppIntent.self, provider: Provider()) { entry in
-            StudioWatchComplicationEntryView(entry: entry)
-                .containerBackground(.fill.tertiary, for: .widget)
+        StaticConfiguration(kind: kind, provider: StudioComplicationProvider()) { entry in
+            StudioComplicationView(entry: entry)
         }
+        .configurationDisplayName("Studio")
+        .description("Timer live o grafico settimanale di studio.")
+        .supportedFamilies([.accessoryRectangular, .accessoryCircular, .accessoryCorner, .accessoryInline])
     }
 }
-
-extension ConfigurationAppIntent {
-    fileprivate static var smiley: ConfigurationAppIntent {
-        let intent = ConfigurationAppIntent()
-        intent.favoriteEmoji = "😀"
-        return intent
-    }
-    
-    fileprivate static var starEyes: ConfigurationAppIntent {
-        let intent = ConfigurationAppIntent()
-        intent.favoriteEmoji = "🤩"
-        return intent
-    }
-}
-
-#Preview(as: .accessoryRectangular) {
-    StudioWatchComplication()
-} timeline: {
-    SimpleEntry(date: .now, configuration: .smiley)
-    SimpleEntry(date: .now, configuration: .starEyes)
-}    
