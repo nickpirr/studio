@@ -16,6 +16,7 @@
 		01CF6CEB2FE54BB300C1B37C /* StudioWatchComplicationExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		01CF6D072FE5954B00C1B37C /* StudioIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01CF6D052FE5951C00C1B37C /* StudioIntents.swift */; };
 		01CF6D082FE5954B00C1B37C /* StudioIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01CF6D052FE5951C00C1B37C /* StudioIntents.swift */; };
+		01E5B6462FE6A0670047530A /* Studio Watch App Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 01CF6CCB2FE54B8800C1B37C /* Studio Watch App Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 01CF6CD92FE54BB200C1B37C;
 			remoteInfo = StudioWatchComplicationExtension;
+		};
+		01E5B6472FE6A0910047530A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 01BAB7CA2FBDBD42002D9CC4 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01CF6CCA2FE54B8800C1B37C;
+			remoteInfo = "Studio Watch App Watch App";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -53,6 +61,7 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
+				01E5B6462FE6A0670047530A /* Studio Watch App Watch App.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -266,6 +275,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				01E5B6482FE6A0910047530A /* PBXTargetDependency */,
 				01BAB7F92FBDBDF0002D9CC4 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
@@ -466,6 +476,11 @@
 			isa = PBXTargetDependency;
 			target = 01CF6CD92FE54BB200C1B37C /* StudioWatchComplicationExtension */;
 			targetProxy = 01CF6CE92FE54BB300C1B37C /* PBXContainerItemProxy */;
+		};
+		01E5B6482FE6A0910047530A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01CF6CCA2FE54B8800C1B37C /* Studio Watch App Watch App */;
+			targetProxy = 01E5B6472FE6A0910047530A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
