@@ -379,30 +379,47 @@ extension StudyManager: WCSessionDelegate {
 
     // MARK: - Sincronizzazione iPhone → Watch (materie + grafico settimanale)
     func syncStateToWatch() {
-        guard UserDefaults.standard.bool(forKey: "watchCompatibilityEnabled"),
-              WCSession.isSupported(), WCSession.default.activationState == .activated
-        else { return }
-
-        let watchCourses = courses.map { WatchCourseLite(name: $0.name, icon: $0.icon, colorName: $0.colorName) }
-        guard let coursesData = try? JSONEncoder().encode(watchCourses) else { return }
-
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let weeklyMinutes: [Int] = (0..<7).reversed().map { offset in
-            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { return 0 }
-            return completedSessions
-                .filter { cal.isDate($0.date, inSameDayAs: day) }
-                .reduce(0) { $0 + $1.minutes }
-        }
-
-        let context: [String: Any] = [
-            "courses": coursesData,
-            "weeklyMinutes": weeklyMinutes
-        ]
-        try? WCSession.default.updateApplicationContext(context)
+        pushFullStateToWatch()
     }
+    
 }
+func pushFullStateToWatch() {
+    guard UserDefaults.standard.bool(forKey: "watchCompatibilityEnabled"),
+          WCSession.isSupported(),
+          WCSession.default.activationState == .activated
+    else { return }
 
+    let coursesRaw = UserDefaults.standard.data(forKey: "savedCourses")
+    let courses = coursesRaw.flatMap { try? JSONDecoder().decode([StudyCourse].self, from: $0) } ?? []
+    let watchCourses = courses.map { WatchCourseLite(name: $0.name, icon: $0.icon, colorName: $0.colorName) }
+    guard let coursesData = try? JSONEncoder().encode(watchCourses) else { return }
+
+    let sessionsRaw = UserDefaults.standard.data(forKey: "savedSessions")
+    let sessions = sessionsRaw.flatMap { try? JSONDecoder().decode([CompletedSession].self, from: $0) } ?? []
+
+    let cal = Calendar.current
+    let today = cal.startOfDay(for: Date())
+    let weeklyMinutes: [Int] = (0..<7).reversed().map { offset in
+        guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { return 0 }
+        return sessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
+    }
+
+    let defaults = WatchSync.defaults
+    let sessionActive = defaults?.bool(forKey: WatchSync.keySessionActive) ?? false
+    let courseName    = defaults?.string(forKey: WatchSync.keyCourseName) ?? ""
+    let sessionID     = defaults?.string(forKey: WatchSync.keySessionID) ?? ""
+    let startDate     = defaults?.double(forKey: WatchSync.keyStartDate) ?? 0
+
+    let context: [String: Any] = [
+        "courses": coursesData,
+        "weeklyMinutes": weeklyMinutes,
+        "sessionActive": sessionActive,
+        "courseName": courseName,
+        "sessionID": sessionID,
+        "startDate": startDate
+    ]
+    try? WCSession.default.updateApplicationContext(context)
+}
 extension Notification.Name {
     static let startSessionFromWatch = Notification.Name("startSessionFromWatch")
 }
@@ -2399,6 +2416,7 @@ struct ActiveWorkoutView: View {
             guard !hasStartedThisView else { return }
             hasStartedThisView = true
             restoreOrStartSession()
+            pushFullStateToWatch()
             Task {
                 var intent = StudioFocusFilterIntent()
                 intent.courseName = course.name
@@ -2609,6 +2627,7 @@ struct ActiveWorkoutView: View {
         defaults?.set("",    forKey: "sharedCourseName")
         sharedSessionActive = false; sharedStopRequested = false
         onEnd(max(1, secondsElapsed / 60))
+        pushFullStateToWatch()
     }
 
     func syncWithLiveActivityBackgroundChanges() {

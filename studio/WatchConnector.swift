@@ -51,6 +51,25 @@ final class WatchConnector: NSObject, ObservableObject, WCSessionDelegate {
             weeklyMinutes = weekly
             defaults?.set(weekly, forKey: WatchSync.keyWeeklyMinutes)
         }
+
+        // NUOVO: stato sessione — questo fa apparire/scomparire il timer sul Watch
+        if let active = context["sessionActive"] as? Bool {
+            sessionActive = active
+            defaults?.set(active, forKey: WatchSync.keySessionActive)
+        }
+        if let name = context["courseName"] as? String {
+            courseName = name
+            defaults?.set(name, forKey: WatchSync.keyCourseName)
+        }
+        if let sid = context["sessionID"] as? String {
+            sessionID = sid
+            defaults?.set(sid, forKey: WatchSync.keySessionID)
+        }
+        if let start = context["startDate"] as? Double, start > 0 {
+            startDate = Date(timeIntervalSince1970: start)
+            defaults?.set(start, forKey: WatchSync.keyStartDate)
+        }
+
         WidgetCenter.shared.reloadAllTimelines()
     }
 
