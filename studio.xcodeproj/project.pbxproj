@@ -89,6 +89,7 @@
 		01CF6CDA2FE54BB200C1B37C /* StudioWatchComplicationExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StudioWatchComplicationExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		01CF6CF22FE54D2C00C1B37C /* StudioWatchComplicationExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StudioWatchComplicationExtension.entitlements; sourceTree = "<group>"; };
 		01CF6D052FE5951C00C1B37C /* StudioIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudioIntents.swift; sourceTree = "<group>"; };
+		01E9C2DB2FE96274003C8145 /* widgetstudioExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = widgetstudioExtension.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -236,6 +237,7 @@
 		01BAB7C92FBDBD42002D9CC4 = {
 			isa = PBXGroup;
 			children = (
+				01E9C2DB2FE96274003C8145 /* widgetstudioExtension.entitlements */,
 				01CF6D052FE5951C00C1B37C /* StudioIntents.swift */,
 				01CF6CF22FE54D2C00C1B37C /* StudioWatchComplicationExtension.entitlements */,
 				01BAB7D42FBDBD42002D9CC4 /* studio */,
@@ -704,6 +706,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = widgetstudioExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = FC4758TVE2;
@@ -737,6 +740,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = widgetstudioExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = FC4758TVE2;

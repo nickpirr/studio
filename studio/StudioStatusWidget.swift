@@ -28,7 +28,7 @@ struct StudioStatusProvider: TimelineProvider {
         completion(Timeline(entries: [currentEntry()], policy: .after(next)))
     }
     private func currentEntry() -> StudioStatusEntry {
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         let active = defaults?.bool(forKey: "sharedSessionActive") ?? false
         let name = defaults?.string(forKey: "sharedCourseName") ?? ""
         let startInterval = defaults?.double(forKey: "sharedStartDate") ?? 0

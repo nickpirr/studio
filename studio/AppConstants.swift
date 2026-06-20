@@ -9,7 +9,7 @@ import Foundation
 
 enum AppConstants {
     // Sostituisci qui il tuo Suite Name per App Groups
-    static let suiteName = "group.com.niccolo.studio"
+    static let suiteName = "group.studioso"
     
     static var sharedDefaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? UserDefaults.standard

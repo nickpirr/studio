@@ -26,7 +26,7 @@ struct StudioWeeklyProvider: TimelineProvider {
         completion(Timeline(entries: [currentEntry()], policy: .after(next)))
     }
     private func currentEntry() -> StudioWeeklyEntry {
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         let weekly = defaults?.array(forKey: "weeklyMinutesByDay") as? [Int] ?? Array(repeating: 0, count: 7)
         return StudioWeeklyEntry(date: Date(), weeklyMinutes: weekly)
     }
@@ -37,6 +37,7 @@ struct StudioWeeklyWidgetView: View {
     private let dayLabels = ["L", "M", "M", "G", "V", "S", "D"]
 
     var body: some View {
+            
         VStack(alignment: .leading, spacing: 6) {
             Text("Questa settimana")
                 .font(.caption.weight(.semibold))

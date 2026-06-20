@@ -43,11 +43,13 @@ struct TogglePauseIntent: LiveActivityIntent {
             for activity in Activity<StudyActivityAttributes>.activities {
                 let state = StudyActivityAttributes.ContentState(startDate: now, accumulatedSeconds: accumulated)
                 await activity.update(.init(state: state, staleDate: nil))
+                
             }
             // Notifica l'app via MainActor
             await MainActor.run {
                 NotificationCenter.default.post(name: AppConstants.resumeSession, object: nil)
             }
+            WidgetCenter.shared.reloadAllTimelines()
             
         } else {
             // PAUSA
@@ -71,6 +73,7 @@ struct TogglePauseIntent: LiveActivityIntent {
             await MainActor.run {
                 NotificationCenter.default.post(name: AppConstants.pauseSession, object: nil)
             }
+            WidgetCenter.shared.reloadAllTimelines()
         }
         
         return .result()
@@ -87,7 +90,6 @@ struct EndSessionIntent: LiveActivityIntent {
         let defaults = AppConstants.sharedDefaults
         defaults.set(true, forKey: "sharedStopRequested")
         
-        // CALCOLA E SALVA I DATI DELLA SESSIONE PRIMA DI CHIUDERE
         if defaults.bool(forKey: "sharedSessionActive"), let courseName = defaults.string(forKey: "sharedCourseName") {
             let startDouble = defaults.double(forKey: "sharedStartDate")
             let pausedSeconds = defaults.integer(forKey: "sharedPausedSeconds")
@@ -98,20 +100,52 @@ struct EndSessionIntent: LiveActivityIntent {
             let elapsed = isPaused ? pausedSeconds : pausedSeconds + Int(now.timeIntervalSince(startDate))
             let minutes = max(1, elapsed / 60)
             
-            // Passiamo i dati al UserDefaults condiviso per l'app
             let sessionData = ["courseName": courseName, "minutes": minutes] as [String : Any]
             defaults.set(sessionData, forKey: AppConstants.sharedSessionEndedToCompleteKey)
         }
+
+        defaults.set(false, forKey: "sharedSessionActive")   // ← chiude subito lo stato, non aspetta l'app
         
-        // Chiudi Live Activity
         for activity in Activity<StudyActivityAttributes>.activities {
             await activity.end(nil, dismissalPolicy: .immediate)
         }
         
-        // Notifica via MainActor
         await MainActor.run {
             NotificationCenter.default.post(name: AppConstants.stopSession, object: nil)
         }
+
+        WidgetCenter.shared.reloadAllTimelines()   // ← forza il refresh del widget
+        return .result()
+    }
+}
+struct EndSessionFromWidgetIntent: AppIntent {
+    static var title: LocalizedStringResource = "Termina sessione"
+    static var openAppWhenRun: Bool = true
+
+    func perform() async throws -> some IntentResult {
+        let defaults = AppConstants.sharedDefaults
+        defaults.set(true, forKey: "sharedStopRequested")
+
+        if defaults.bool(forKey: "sharedSessionActive"), let courseName = defaults.string(forKey: "sharedCourseName") {
+            let startDouble = defaults.double(forKey: "sharedStartDate")
+            let pausedSeconds = defaults.integer(forKey: "sharedPausedSeconds")
+            let isPaused = defaults.bool(forKey: "sharedIsPaused")
+            let startDate = Date(timeIntervalSince1970: startDouble)
+            let now = Date()
+            let elapsed = isPaused ? pausedSeconds : pausedSeconds + Int(now.timeIntervalSince(startDate))
+            let minutes = max(1, elapsed / 60)
+
+            let sessionData = ["courseName": courseName, "minutes": minutes] as [String: Any]
+            defaults.set(sessionData, forKey: AppConstants.sharedSessionEndedToCompleteKey)
+        }
+
+        defaults.set(false, forKey: "sharedSessionActive")   // ← chiude subito lo stato
+
+        for activity in Activity<StudyActivityAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+
+        WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
 }

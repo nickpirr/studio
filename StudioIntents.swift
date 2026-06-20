@@ -29,10 +29,11 @@ struct StopStudySessionIntent: AppIntent {
     static var openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult {
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")   // ← era "group.com.niccolo.studio"
         let sessionID = defaults?.string(forKey: "sharedSessionID") ?? ""
         defaults?.set(true, forKey: "sharedStopRequested")
         defaults?.set(sessionID, forKey: "sharedStopSessionID")
+        defaults?.set(false, forKey: "sharedSessionActive")   // ← aggiunto
 
         let isForeground = defaults?.bool(forKey: "appIsForeground") ?? false
         if !isForeground {
@@ -60,7 +61,7 @@ struct CourseEntityQuery: AppIntents.EntityQuery {
     }
 
     private func loadCourses() -> [CourseEntity] {
-        guard let data = UserDefaults(suiteName: "group.com.niccolo.studio")?
+        guard let data = UserDefaults(suiteName: "group.studioso")?
             .data(forKey: "widgetCourses"),
               let courses = try? JSONDecoder().decode([WidgetCourse].self, from: data)
         else { return [] }
@@ -80,7 +81,7 @@ struct StartStudySessionIntent: AppIntent {
     var course: CourseEntity
 
     func perform() async throws -> some IntentResult {
-        UserDefaults(suiteName: "group.com.niccolo.studio")?
+        UserDefaults(suiteName: "group.studioso")?
             .set(course.name, forKey: "shortcutPendingCourse")
         return .result()
     }

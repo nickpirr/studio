@@ -192,14 +192,14 @@ class StudyManager: NSObject, ObservableObject {
 
     func saveCoursesForWidget() {
         let widgetCourses = courses.map { WidgetCourse(name: $0.name, icon: $0.icon, colorName: $0.colorName) }
-        guard let defaults = UserDefaults(suiteName: "group.com.niccolo.studio"),
+        guard let defaults = UserDefaults(suiteName: "group.studioso"),
               let data = try? JSONEncoder().encode(widgetCourses) else { return }
         defaults.set(data, forKey: "widgetCourses")
         WidgetCenter.shared.reloadAllTimelines()
         syncStateToWatch()   // ← aggiungi questa riga
     }
     func saveWidgetWeeklyData() {
-        guard let defaults = UserDefaults(suiteName: "group.com.niccolo.studio") else { return }
+        guard let defaults = UserDefaults(suiteName: "group.studioso") else { return }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let weekly: [Int] = (0..<7).reversed().map { offset in
@@ -368,12 +368,14 @@ extension StudyManager: WCSessionDelegate {
 
         case "stop":
             guard let sessionID = message["sessionID"] as? String else { return }
-            defaults?.set(true,      forKey: WatchSync.keyStopRequested)
+            defaults?.set(true, forKey: WatchSync.keyStopRequested)
             defaults?.set(sessionID, forKey: WatchSync.keyStopSessionID)
+            defaults?.set(false, forKey: WatchSync.keySessionActive)   // ← aggiunto
 
             if UIApplication.shared.applicationState != .active {
                 scheduleWatchStopNotification()
             }
+            WidgetCenter.shared.reloadAllTimelines()   // ← aggiunto
 
         default: break
         }
@@ -429,7 +431,9 @@ func pushFullStateToWatch() {
         "sessionID": sessionID,
         "startDate": startDate
     ]
+    
     try? WCSession.default.updateApplicationContext(context)
+    WidgetCenter.shared.reloadAllTimelines() 
 }
 extension Notification.Name {
     static let startSessionFromWatch = Notification.Name("startSessionFromWatch")
@@ -499,85 +503,91 @@ struct ContentView: View {
             }
         }
         .onOpenURL { url in
-            if url.scheme == "studio" && url.host == "complete" {
-                let defaults = AppConstants.sharedDefaults
-                if let sessionData = defaults.dictionary(forKey: AppConstants.sharedSessionEndedToCompleteKey),
-                   let courseName = sessionData["courseName"] as? String,
-                   let minutes = sessionData["minutes"] as? Int,
-                   let course = manager.courses.first(where: { $0.name == courseName }) {
+                    if url.scheme == "studio" && url.host == "complete" {
+                        completePendingSessionIfNeeded()
+                        return
+                    }
                     
-                    defaults.removeObject(forKey: AppConstants.sharedSessionEndedToCompleteKey)
+                    guard url.scheme == "studio",
+                          url.host == "start",
+                          let name = url.pathComponents.dropFirst().first?.removingPercentEncoding,
+                          let course = manager.courses.first(where: { $0.name == name })
+                    else { return }
+                    
+                    let defaults = AppConstants.sharedDefaults
+                    let isSessionActive = defaults.bool(forKey: "sharedSessionActive")
                     
                     selectedTab = 1
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        pendingSession = PendingSession(course: course, minutes: minutes)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if isSessionActive {
+                            attemptToResumeSession()
+                        } else {
+                            selectedCourse = course
+                        }
                     }
                 }
-                return
-            }
-            
-            guard url.scheme == "studio",
-                  url.host == "start",
-                  let name = url.pathComponents.dropFirst().first?.removingPercentEncoding,
-                  let course = manager.courses.first(where: { $0.name == name })
-            else { return }
-            
-            let defaults = AppConstants.sharedDefaults
-            let isSessionActive = defaults.bool(forKey: "sharedSessionActive")
-            
-            selectedTab = 1
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if isSessionActive {
+                .onAppear {
+                    checkPendingShortcut()
                     attemptToResumeSession()
-                } else {
+                    completePendingSessionIfNeeded()
+                    manager.activateWatchConnectivity()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    checkPendingShortcut()
+                    attemptToResumeSession()
+                    completePendingSessionIfNeeded()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .startSessionFromWatch)) { notification in
+                    guard let courseName = notification.userInfo?["courseName"] as? String,
+                          let course = manager.courses.first(where: { $0.name == courseName })
+                    else { return }
+                    selectedCourse = course
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    UserDefaults(suiteName: "group.studioso")?.set(newPhase == .active, forKey: "appIsForeground")
+                }
+            }
+                
+            private func attemptToResumeSession() {
+                let defaults = AppConstants.sharedDefaults
+                if defaults.bool(forKey: "sharedSessionActive") {
+                    let courseName = defaults.string(forKey: "sharedCourseName") ?? ""
+                    if let course = manager.courses.first(where: { $0.name == courseName }) {
+                        selectedCourse = course
+                    }
+                }
+            }
+
+            private func checkPendingShortcut() {
+                guard
+                    let defaults = UserDefaults(suiteName: AppConstants.suiteName),
+                    let name = defaults.string(forKey: "shortcutPendingCourse"),
+                    !name.isEmpty,
+                    let course = manager.courses.first(where: { $0.name == name })
+                else { return }
+                defaults.removeObject(forKey: "shortcutPendingCourse")
+                selectedTab = 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     selectedCourse = course
                 }
             }
-        }
-        .onAppear {
-            checkPendingShortcut()
-            attemptToResumeSession()
-            manager.activateWatchConnectivity()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            checkPendingShortcut()
-            attemptToResumeSession()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .startSessionFromWatch)) { notification in
-            guard let courseName = notification.userInfo?["courseName"] as? String,
-                  let course = manager.courses.first(where: { $0.name == courseName })
-            else { return }
-            selectedCourse = course
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            UserDefaults(suiteName: "group.com.niccolo.studio")?.set(newPhase == .active, forKey: "appIsForeground")
-        }
-    }
-        
-    private func attemptToResumeSession() {
-        let defaults = AppConstants.sharedDefaults
-        if defaults.bool(forKey: "sharedSessionActive") {
-            let courseName = defaults.string(forKey: "sharedCourseName") ?? ""
-            if let course = manager.courses.first(where: { $0.name == courseName }) {
-                selectedCourse = course
+
+            private func completePendingSessionIfNeeded() {
+                let defaults = AppConstants.sharedDefaults
+                guard let sessionData = defaults.dictionary(forKey: AppConstants.sharedSessionEndedToCompleteKey),
+                      let courseName = sessionData["courseName"] as? String,
+                      let minutes = sessionData["minutes"] as? Int,
+                      let course = manager.courses.first(where: { $0.name == courseName })
+                else { return }
+
+                defaults.removeObject(forKey: AppConstants.sharedSessionEndedToCompleteKey)
+                selectedCourse = nil
+                selectedTab = 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    pendingSession = PendingSession(course: course, minutes: minutes)
+                }
             }
         }
-    }
-
-    private func checkPendingShortcut() {
-        guard
-            let defaults = UserDefaults(suiteName: AppConstants.suiteName),
-            let name = defaults.string(forKey: "shortcutPendingCourse"),
-            !name.isEmpty,
-            let course = manager.courses.first(where: { $0.name == name })
-        else { return }
-        defaults.removeObject(forKey: "shortcutPendingCourse")
-        selectedTab = 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            selectedCourse = course
-        }
-    }
-}
 struct StudyMedal: Identifiable, Codable {
     var id: String
     var title: String
@@ -2177,14 +2187,14 @@ struct ActiveWorkoutView: View {
     @AppStorage("useAlternativeViews") private var useAlternativeViews = false
     @AppStorage("selectedBackgroundId") private var selectedBackgroundId = "noir"
     @AppStorage("isFocusModeEnabled") private var isFocusModeEnabled: Bool = false
-    @AppStorage("sharedIsPaused",      store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedIsPaused = false
-    @AppStorage("sharedPausedSeconds", store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedPausedSeconds = 0
-    @AppStorage("sharedStartDate",     store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedStartDate: Double = 0
-    @AppStorage("sharedStopRequested", store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedStopRequested = false
-    @AppStorage("sharedSessionActive", store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedSessionActive = false
-    @AppStorage("sharedCourseName",    store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedCourseName = ""
-    @AppStorage("sharedSessionID",     store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedSessionID = ""
-    @AppStorage("sharedStopSessionID", store: UserDefaults(suiteName: "group.com.niccolo.studio")) var sharedStopSessionID = ""
+    @AppStorage("sharedIsPaused",      store: UserDefaults(suiteName: "group.studioso")) var sharedIsPaused = false
+    @AppStorage("sharedPausedSeconds", store: UserDefaults(suiteName: "group.studioso")) var sharedPausedSeconds = 0
+    @AppStorage("sharedStartDate",     store: UserDefaults(suiteName: "group.studioso")) var sharedStartDate: Double = 0
+    @AppStorage("sharedStopRequested", store: UserDefaults(suiteName: "group.studioso")) var sharedStopRequested = false
+    @AppStorage("sharedSessionActive", store: UserDefaults(suiteName: "group.studioso")) var sharedSessionActive = false
+    @AppStorage("sharedCourseName",    store: UserDefaults(suiteName: "group.studioso")) var sharedCourseName = ""
+    @AppStorage("sharedSessionID",     store: UserDefaults(suiteName: "group.studioso")) var sharedSessionID = ""
+    @AppStorage("sharedStopSessionID", store: UserDefaults(suiteName: "group.studioso")) var sharedStopSessionID = ""
 
     // MARK: - MOTORE TENDINA
     let compactHeight: CGFloat = 70
@@ -2432,11 +2442,7 @@ struct ActiveWorkoutView: View {
             hasStartedThisView = true
             restoreOrStartSession()
             pushFullStateToWatch()
-            Task {
-                var intent = StudioFocusFilterIntent()
-                intent.courseName = course.name
-                try? await intent.donate()
-            }
+            WidgetCenter.shared.reloadAllTimelines()
             if isFocusModeEnabled {
                 UIApplication.perform(NSSelectorFromString("sharedApplication"))?
                     .takeUnretainedValue()
@@ -2578,7 +2584,7 @@ struct ActiveWorkoutView: View {
 
     // MARK: - SESSION LOGIC
     func restoreOrStartSession() {
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         if defaults?.bool(forKey: "sharedSessionActive") == true,
            defaults?.string(forKey: "sharedCourseName") == course.name {
             sharedIsPaused = defaults?.bool(forKey: "sharedIsPaused") ?? false
@@ -2599,7 +2605,7 @@ struct ActiveWorkoutView: View {
     func startFreshSession() {
         secondsElapsed = 0; isPaused = false; pausedSeconds = 0
         startDate = Date(); isExpanded = false; targetHeight = compactHeight
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         let newID = UUID().uuidString
         defaults?.set(false,                        forKey: "sharedIsPaused")
         defaults?.set(0,                            forKey: "sharedPausedSeconds")
@@ -2636,13 +2642,14 @@ struct ActiveWorkoutView: View {
 
     func endSessionCleanly() {
         Task { await liveActivity?.end(nil, dismissalPolicy: .immediate) }
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         defaults?.set(false, forKey: "sharedSessionActive")
         defaults?.set(false, forKey: "sharedStopRequested")
         defaults?.set("",    forKey: "sharedCourseName")
         sharedSessionActive = false; sharedStopRequested = false
         onEnd(max(1, secondsElapsed / 60))
         pushFullStateToWatch()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func syncWithLiveActivityBackgroundChanges() {
@@ -4438,12 +4445,30 @@ struct NotificationsSettingsView: View {
 struct focusSettingsView: View {
     @Environment(\.openURL) var openURL
     @AppStorage("focusModeAutoActivate") private var focusModeAutoActivate = false
+    @AppStorage("isFocusModeEnabled") private var isFocusModeEnabled: Bool = false
 
     var body: some View {
         List {
             // Sezione esistente — toggle Focus Mode
             Section {
-                // ... il tuo toggle isFocusModeEnabled esistente
+                Toggle(isOn: $isFocusModeEnabled) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.orange)
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        Text("Modalità Focus Strict")
+                            .font(.system(.body, design: .rounded))
+                    }
+                }
+                .tint(.orange)
+            } footer: {
+                Text("La Modalità Focus Strict impedisce allo schermo di spegnersi e avvia il salvaschermo anti burn-in. Solo le sessioni con il Focus attivo sbloccano le medaglie.")
+                    .font(.system(.footnote, design: .rounded))
             }
 
             // NUOVA SEZIONE — Focus di sistema

@@ -14,7 +14,7 @@ struct WatchCourseLite: Codable, Identifiable {
 }
 
 enum WatchSync {
-    static let suiteName = "group.com.niccolo.studio"
+    static let suiteName = "group.studioso"
 
     // Chiavi condivise — stessi nomi usati già nell'App Group dell'iPhone
     static let keySessionActive = "sharedSessionActive"

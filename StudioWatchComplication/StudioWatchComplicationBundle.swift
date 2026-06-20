@@ -11,7 +11,8 @@ import SwiftUI
 @main
 struct StudioWatchComplicationBundle: WidgetBundle {
     var body: some Widget {
-        StudioWatchComplication()
+        StudioTimerWatchComplication()
+        StudioChartWatchComplication()
         StudioQuickStartWatchComplication()
     }
 }

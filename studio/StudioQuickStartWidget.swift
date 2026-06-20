@@ -24,7 +24,7 @@ struct StudioQuickStartProvider: TimelineProvider {
         completion(Timeline(entries: [currentEntry()], policy: .never))
     }
     private func currentEntry() -> StudioQuickStartEntry {
-        let defaults = UserDefaults(suiteName: "group.com.niccolo.studio")
+        let defaults = UserDefaults(suiteName: "group.studioso")
         guard let data = defaults?.data(forKey: "widgetCourses"),
               let courses = try? JSONDecoder().decode([WidgetCourse].self, from: data) else {
             return StudioQuickStartEntry(date: Date(), courses: [])

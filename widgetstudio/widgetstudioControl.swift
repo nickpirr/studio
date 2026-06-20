@@ -10,7 +10,7 @@ import SwiftUI
 import WidgetKit
 
 struct widgetstudioControl: ControlWidget {
-    static let kind: String = "group.com.niccolo.studio"
+    static let kind: String = "group.studioso"
 
     var body: some ControlWidgetConfiguration {
         AppIntentControlConfiguration(
