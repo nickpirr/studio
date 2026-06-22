@@ -12,10 +12,9 @@ import SwiftUI
 struct widgetstudioBundle: WidgetBundle {
     var body: some Widget {
         widgetstudio()
-        widgetstudioControl()
-        widgetstudioLiveActivity()
         StudioWeeklyWidget()
-        StudioQuickStartWidget()
-        StudioStatusWidget()
+        StudioGradesWidget()
+        StudioCourseMixWidget()
+        widgetstudioLiveActivity()
     }
 }

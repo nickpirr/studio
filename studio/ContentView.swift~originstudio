@@ -14,6 +14,7 @@ import AppIntents
 import UserNotifications
 import SwiftUI
 import ActivityKit
+import CloudKit
 import Charts
 import Combine
 import WidgetKit
@@ -23,6 +24,361 @@ import SceneKit
 extension Date: Identifiable {
     public var id: TimeInterval { timeIntervalSince1970 }
 }
+
+extension View {
+    func flatDashboardCard(cornerRadius: CGFloat = 20) -> some View {
+        background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+}
+
+struct CloudActiveSession: Equatable {
+    let sessionID: String
+    let courseName: String
+    let startDate: Date
+    let isPaused: Bool
+    let pausedSeconds: Int
+    let lastHeartbeatAt: Date
+    let deviceName: String
+
+    var isRecent: Bool {
+        Date().timeIntervalSince(lastHeartbeatAt) < 180
+    }
+}
+
+enum CloudAccountState: Equatable {
+    case checking
+    case available
+    case noAccount
+    case restricted
+    case couldNotDetermine
+    case unavailable(String)
+
+    var title: String {
+        switch self {
+        case .checking: return "Controllo account..."
+        case .available: return "iCloud collegato"
+        case .noAccount: return "Nessun account iCloud"
+        case .restricted: return "iCloud limitato"
+        case .couldNotDetermine: return "Stato iCloud non disponibile"
+        case .unavailable: return "iCloud non disponibile"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .checking:
+            return "Studio sta verificando l'account usato per la sincronizzazione."
+        case .available:
+            return "Le sessioni attive possono essere rilevate dagli altri dispositivi con lo stesso Apple ID."
+        case .noAccount:
+            return "Accedi a iCloud nelle Impostazioni di sistema per sincronizzare tra iPhone e iPad."
+        case .restricted:
+            return "Questo dispositivo non puo usare iCloud per restrizioni di sistema o account."
+        case .couldNotDetermine:
+            return "Non e stato possibile leggere lo stato dell'account iCloud."
+        case .unavailable(let message):
+            return message
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .available: return "checkmark.icloud.fill"
+        case .checking: return "icloud"
+        case .noAccount: return "person.crop.circle.badge.exclamationmark"
+        case .restricted: return "lock.icloud.fill"
+        case .couldNotDetermine, .unavailable: return "exclamationmark.icloud.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .available: return .green
+        case .checking: return .blue
+        case .noAccount, .restricted, .couldNotDetermine, .unavailable: return .orange
+        }
+    }
+}
+
+@MainActor
+final class CloudSessionSync: ObservableObject {
+    static let shared = CloudSessionSync()
+
+    @Published private(set) var accountState: CloudAccountState = .checking
+    @Published private(set) var accountIdentifier: String = "Account iCloud del dispositivo"
+
+    private let container = CKContainer.default()
+    private let recordID = CKRecord.ID(recordName: "currentActiveSession")
+    private let heartbeatMinimumInterval: TimeInterval = 30
+    private var lastPublishedAt: Date?
+
+    private var database: CKDatabase { container.privateCloudDatabase }
+
+    private init() {}
+
+    func refreshAccountStatus() async {
+        accountState = .checking
+        let result = await cloudAccountStatus()
+
+        switch result.status {
+        case .available:
+            accountState = .available
+            await refreshAccountIdentifier()
+        case .noAccount:
+            accountState = .noAccount
+        case .restricted:
+            accountState = .restricted
+        case .couldNotDetermine:
+            accountState = result.error.map { .unavailable($0.localizedDescription) } ?? .couldNotDetermine
+        case .temporarilyUnavailable:
+            accountState = .unavailable(result.error?.localizedDescription ?? "iCloud e temporaneamente non disponibile.")
+        @unknown default:
+            accountState = .couldNotDetermine
+        }
+    }
+
+    func publishActiveSession(
+        sessionID: String,
+        courseName: String,
+        startDate: Date,
+        isPaused: Bool,
+        pausedSeconds: Int,
+        force: Bool = false
+    ) async {
+        guard await isAccountAvailable() else { return }
+        if !force,
+           let lastPublishedAt,
+           Date().timeIntervalSince(lastPublishedAt) < heartbeatMinimumInterval {
+            return
+        }
+
+        do {
+            let record = try await fetchOrCreateActiveSessionRecord()
+            record["sessionID"] = sessionID as CKRecordValue
+            record["courseName"] = courseName as CKRecordValue
+            record["startDate"] = startDate as CKRecordValue
+            record["isPaused"] = (isPaused ? 1 : 0) as CKRecordValue
+            record["pausedSeconds"] = pausedSeconds as CKRecordValue
+            record["lastHeartbeatAt"] = Date() as CKRecordValue
+            record["deviceName"] = UIDevice.current.name as CKRecordValue
+            _ = try await database.save(record)
+            lastPublishedAt = Date()
+        } catch {
+            print("CloudKit active session save failed: \(error.localizedDescription)")
+        }
+    }
+
+    func clearActiveSession(sessionID: String?) async {
+        guard await isAccountAvailable() else { return }
+
+        do {
+            if let sessionID,
+               let existing = try? await database.record(for: recordID),
+               existing["sessionID"] as? String != sessionID {
+                return
+            }
+            _ = try await database.deleteRecord(withID: recordID)
+            lastPublishedAt = nil
+        } catch let error as CKError where error.code == .unknownItem {
+            lastPublishedAt = nil
+        } catch {
+            print("CloudKit active session delete failed: \(error.localizedDescription)")
+        }
+    }
+
+    func fetchActiveSession() async -> CloudActiveSession? {
+        guard await isAccountAvailable() else { return nil }
+
+        do {
+            let record = try await database.record(for: recordID)
+            guard let sessionID = record["sessionID"] as? String,
+                  let courseName = record["courseName"] as? String,
+                  let startDate = record["startDate"] as? Date,
+                  let pausedSeconds = record["pausedSeconds"] as? Int,
+                  let lastHeartbeatAt = record["lastHeartbeatAt"] as? Date
+            else { return nil }
+
+            let isPausedNumber = record["isPaused"] as? Int ?? 0
+            let deviceName = record["deviceName"] as? String ?? "altro dispositivo"
+
+            return CloudActiveSession(
+                sessionID: sessionID,
+                courseName: courseName,
+                startDate: startDate,
+                isPaused: isPausedNumber == 1,
+                pausedSeconds: pausedSeconds,
+                lastHeartbeatAt: lastHeartbeatAt,
+                deviceName: deviceName
+            )
+        } catch let error as CKError where error.code == .unknownItem {
+            return nil
+        } catch {
+            print("CloudKit active session fetch failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func syncCompletedSessions(local sessions: [CompletedSession]) async -> [CompletedSession] {
+        guard await isAccountAvailable() else { return sessions }
+
+        let remoteSessions = await fetchCompletedSessions()
+        var mergedByID = Dictionary(uniqueKeysWithValues: remoteSessions.map { ($0.id, $0) })
+        for session in sessions {
+            mergedByID[session.id] = session
+        }
+
+        let merged = mergedByID.values.sorted { $0.date > $1.date }
+        await uploadCompletedSessions(merged)
+        return merged
+    }
+
+    func uploadCompletedSessions(_ sessions: [CompletedSession]) async {
+        guard await isAccountAvailable() else { return }
+
+        for session in sessions {
+            do {
+                let record = try await fetchOrCreateCompletedSessionRecord(id: session.id)
+                write(session: session, to: record)
+                _ = try await database.save(record)
+            } catch {
+                print("CloudKit completed session save failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func deleteCompletedSessions(ids: Set<UUID>) async {
+        guard !ids.isEmpty, await isAccountAvailable() else { return }
+
+        for id in ids {
+            do {
+                _ = try await database.deleteRecord(withID: completedSessionRecordID(for: id))
+            } catch let error as CKError where error.code == .unknownItem {
+                continue
+            } catch {
+                print("CloudKit completed session delete failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func fetchCompletedSessions() async -> [CompletedSession] {
+        let query = CKQuery(recordType: "CompletedSession", predicate: NSPredicate(value: true))
+        query.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
+
+        do {
+            let records = try await allRecords(matching: query)
+            return records.compactMap(completedSession(from:))
+        } catch {
+            print("CloudKit completed sessions fetch failed: \(error.localizedDescription)")
+            return []
+        }
+    }
+
+    private func allRecords(matching query: CKQuery) async throws -> [CKRecord] {
+        try await withCheckedThrowingContinuation { continuation in
+            database.perform(query, inZoneWith: nil) { records, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: records ?? [])
+                }
+            }
+        }
+    }
+
+    private func completedSessionRecordID(for id: UUID) -> CKRecord.ID {
+        CKRecord.ID(recordName: "completedSession_\(id.uuidString)")
+    }
+
+    private func fetchOrCreateCompletedSessionRecord(id: UUID) async throws -> CKRecord {
+        let recordID = completedSessionRecordID(for: id)
+        do {
+            return try await database.record(for: recordID)
+        } catch let error as CKError where error.code == .unknownItem {
+            return CKRecord(recordType: "CompletedSession", recordID: recordID)
+        }
+    }
+
+    private func write(session: CompletedSession, to record: CKRecord) {
+        record["sessionID"] = session.id.uuidString as CKRecordValue
+        record["courseIcon"] = session.courseIcon as CKRecordValue
+        record["courseName"] = session.courseName as CKRecordValue
+        record["courseColorName"] = session.courseColorName as CKRecordValue
+        record["minutes"] = session.minutes as CKRecordValue
+        record["date"] = session.date as CKRecordValue
+        record["topic"] = session.topic as CKRecordValue
+        record["comment"] = session.comment as CKRecordValue
+        record["effort"] = session.effort as CKRecordValue
+        record["concentration"] = session.concentration as CKRecordValue
+        record["satisfaction"] = session.satisfaction as CKRecordValue
+        record["wasFocusModeActive"] = ((session.wasFocusModeActive ?? false) ? 1 : 0) as CKRecordValue
+        record["updatedAt"] = Date() as CKRecordValue
+    }
+
+    private func completedSession(from record: CKRecord) -> CompletedSession? {
+        guard let idString = record["sessionID"] as? String,
+              let id = UUID(uuidString: idString),
+              let courseIcon = record["courseIcon"] as? String,
+              let courseName = record["courseName"] as? String,
+              let courseColorName = record["courseColorName"] as? String,
+              let minutes = record["minutes"] as? Int,
+              let date = record["date"] as? Date
+        else { return nil }
+
+        return CompletedSession(
+            id: id,
+            courseIcon: courseIcon,
+            courseName: courseName,
+            courseColor: Presets.color(from: courseColorName),
+            minutes: minutes,
+            date: date,
+            topic: record["topic"] as? String ?? "",
+            comment: record["comment"] as? String ?? "",
+            effort: record["effort"] as? Int ?? 5,
+            concentration: record["concentration"] as? Int ?? 5,
+            satisfaction: record["satisfaction"] as? Int ?? 5,
+            wasFocusModeActive: (record["wasFocusModeActive"] as? Int ?? 0) == 1
+        )
+    }
+
+    private func isAccountAvailable() async -> Bool {
+        if accountState == .available { return true }
+        await refreshAccountStatus()
+        return accountState == .available
+    }
+
+    private func fetchOrCreateActiveSessionRecord() async throws -> CKRecord {
+        do {
+            return try await database.record(for: recordID)
+        } catch let error as CKError where error.code == .unknownItem {
+            return CKRecord(recordType: "ActiveSession", recordID: recordID)
+        }
+    }
+
+    private func refreshAccountIdentifier() async {
+        do {
+            let userRecordID = try await container.userRecordID()
+            accountIdentifier = "iCloud \(userRecordID.recordName.prefix(8))"
+        } catch {
+            accountIdentifier = "Account iCloud collegato"
+        }
+    }
+
+    private func cloudAccountStatus() async -> (status: CKAccountStatus, error: Error?) {
+        await withCheckedContinuation { continuation in
+            container.accountStatus { status, error in
+                continuation.resume(returning: (status, error))
+            }
+        }
+    }
+}
+
 // MARK: - PRESET PER ICONE E COLORI
 
 struct Presets {
@@ -136,7 +492,10 @@ class StudyManager: NSObject, ObservableObject {
     @Published var courses: [StudyCourse] = [] {
         didSet { saveCourses(); saveCoursesForWidget() }
     }
-    
+
+    private var isApplyingCloudSessions = false
+    private var knownCompletedSessionIDs: Set<UUID> = []
+
     // OGNI VOLTA CHE SI AGGIUNGE O RIMUOVE UNA SESSIONE, RICALCOLA AUTOMATICAMENTE LE MEDAGLIE
     @Published var completedSessions: [CompletedSession] = [] {
         didSet {
@@ -144,6 +503,7 @@ class StudyManager: NSObject, ObservableObject {
             recalculateMedalsRetroactively()
             syncStateToWatch()
             saveWidgetWeeklyData()
+            handleCompletedSessionsCloudUpdate()
         }
     }
     
@@ -151,16 +511,19 @@ class StudyManager: NSObject, ObservableObject {
     @Published var medals: [StudyMedal] = []
 
     override init() {
+        let loadedSessions = Self.load([CompletedSession].self, key: "savedSessions") ?? []
         self.courses = Self.load([StudyCourse].self, key: "savedCourses") ?? [
             StudyCourse(name: "Matematica", icon: "function", color: .blue, studyGoalHoursWeekly: 10),
             StudyCourse(name: "Storia", icon: "book.closed.fill", color: .orange, studyGoalHoursWeekly: 5)
         ]
-        self.completedSessions = Self.load([CompletedSession].self, key: "savedSessions") ?? []
+        self.completedSessions = loadedSessions
+        self.knownCompletedSessionIDs = Set(loadedSessions.map(\.id))
         super.init()
         saveCoursesForWidget()
         
         loadMedals()
         recalculateMedalsRetroactively()
+        syncCompletedSessionsFromCloud()
     }
 
     private static func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
@@ -176,6 +539,37 @@ class StudyManager: NSObject, ObservableObject {
 
     func saveCourses()  { save(courses,           key: "savedCourses") }
     func saveSessions() { save(completedSessions, key: "savedSessions") }
+
+    func syncCompletedSessionsFromCloud() {
+        Task { @MainActor in
+            let merged = await CloudSessionSync.shared.syncCompletedSessions(local: completedSessions)
+            applyCloudMergedSessions(merged)
+        }
+    }
+
+    private func applyCloudMergedSessions(_ sessions: [CompletedSession]) {
+        let sorted = sessions.sorted { $0.date > $1.date }
+        let incomingIDs = Set(sorted.map(\.id))
+        guard incomingIDs != knownCompletedSessionIDs else { return }
+
+        isApplyingCloudSessions = true
+        completedSessions = sorted
+        knownCompletedSessionIDs = incomingIDs
+        isApplyingCloudSessions = false
+    }
+
+    private func handleCompletedSessionsCloudUpdate() {
+        let currentIDs = Set(completedSessions.map(\.id))
+        defer { knownCompletedSessionIDs = currentIDs }
+        guard !isApplyingCloudSessions else { return }
+
+        let deletedIDs = knownCompletedSessionIDs.subtracting(currentIDs)
+        let snapshot = completedSessions
+        Task {
+            await CloudSessionSync.shared.uploadCompletedSessions(snapshot)
+            await CloudSessionSync.shared.deleteCompletedSessions(ids: deletedIDs)
+        }
+    }
 
     var totalMinutesToday: Int {
         completedSessions
@@ -200,13 +594,59 @@ class StudyManager: NSObject, ObservableObject {
     }
     func saveWidgetWeeklyData() {
         guard let defaults = UserDefaults(suiteName: "group.studioso") else { return }
-        let cal = Calendar.current
+        var cal = Calendar.current
+        cal.firstWeekday = 2
         let today = cal.startOfDay(for: Date())
         let weekly: [Int] = (0..<7).reversed().map { offset in
             guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { return 0 }
             return completedSessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
         }
+
+        let weekStart = cal.dateInterval(of: .weekOfYear, for: Date())?.start ?? today
+        let weekSessions = completedSessions.filter { $0.date >= weekStart }
+        let courseStats = courses.compactMap { course -> WidgetCourseStat? in
+            let minutes = weekSessions
+                .filter { $0.courseName == course.name }
+                .reduce(0) { $0 + $1.minutes }
+            guard minutes > 0 else { return nil }
+            return WidgetCourseStat(name: course.name, icon: course.icon, colorName: course.colorName, minutes: minutes)
+        }
+        .sorted { $0.minutes > $1.minutes }
+
+        func average(_ values: [Int]) -> Double {
+            guard !values.isEmpty else { return 0 }
+            return Double(values.reduce(0, +)) / Double(values.count)
+        }
+
+        let gradePoints: [WidgetGradePoint] = (0..<7).map { index in
+            guard let day = cal.date(byAdding: .day, value: index - 6, to: today) else {
+                return WidgetGradePoint(dayIndex: index, effort: 0, concentration: 0, satisfaction: 0)
+            }
+            let daySessions = completedSessions.filter { cal.isDate($0.date, inSameDayAs: day) }
+            return WidgetGradePoint(
+                dayIndex: index,
+                effort: average(daySessions.map { $0.effort }),
+                concentration: average(daySessions.map { $0.concentration }),
+                satisfaction: average(daySessions.map { $0.satisfaction })
+            )
+        }
+        let gradeSummary = WidgetGradeSummary(
+            averageEffort: average(weekSessions.map { $0.effort }),
+            averageConcentration: average(weekSessions.map { $0.concentration }),
+            averageSatisfaction: average(weekSessions.map { $0.satisfaction }),
+            dailyPoints: gradePoints
+        )
+
         defaults.set(weekly, forKey: "weeklyMinutesByDay")
+        defaults.set(weekly.reduce(0, +), forKey: "widgetWeekTotalMinutes")
+        defaults.set(weekly.last ?? 0, forKey: "widgetTodayMinutes")
+        defaults.set(weekly.max() ?? 0, forKey: "widgetBestDayMinutes")
+        if let data = try? JSONEncoder().encode(courseStats) {
+            defaults.set(data, forKey: "widgetCourseStatsThisWeek")
+        }
+        if let data = try? JSONEncoder().encode(gradeSummary) {
+            defaults.set(data, forKey: "widgetGradeSummaryThisWeek")
+        }
         WidgetCenter.shared.reloadAllTimelines()
     }
     // MARK: - MOTORE MEDAGLIE E SFONDI (CORRETTO)
@@ -338,6 +778,10 @@ extension StudyManager: WCSessionDelegate {
         DispatchQueue.main.async { self.handleWatchMessage(message) }
     }
 
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        DispatchQueue.main.async { self.handleWatchMessage(applicationContext) }
+    }
+
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         DispatchQueue.main.async { self.handleWatchMessage(userInfo) }
     }
@@ -372,10 +816,29 @@ extension StudyManager: WCSessionDelegate {
             defaults?.set(sessionID, forKey: WatchSync.keyStopSessionID)
             defaults?.set(false, forKey: WatchSync.keySessionActive)   // ← aggiunto
 
+            NotificationCenter.default.post(name: AppConstants.stopSession, object: nil)
+
             if UIApplication.shared.applicationState != .active {
                 scheduleWatchStopNotification()
             }
             WidgetCenter.shared.reloadAllTimelines()   // ← aggiunto
+            pushFullStateToWatch()
+
+        case "pause":
+            if let pausedSeconds = message["pausedSeconds"] as? Int {
+                defaults?.set(true, forKey: WatchSync.keyIsPaused)
+                defaults?.set(pausedSeconds, forKey: WatchSync.keyPausedSeconds)
+                NotificationCenter.default.post(name: AppConstants.pauseSession, object: nil)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+
+        case "resume":
+            if let startDate = message["startDate"] as? Double {
+                defaults?.set(false, forKey: WatchSync.keyIsPaused)
+                defaults?.set(startDate, forKey: WatchSync.keyStartDate)
+                NotificationCenter.default.post(name: AppConstants.resumeSession, object: nil)
+                WidgetCenter.shared.reloadAllTimelines()
+            }
 
         default: break
         }
@@ -422,6 +885,8 @@ func pushFullStateToWatch() {
     let courseName    = defaults?.string(forKey: WatchSync.keyCourseName) ?? ""
     let sessionID     = defaults?.string(forKey: WatchSync.keySessionID) ?? ""
     let startDate     = defaults?.double(forKey: WatchSync.keyStartDate) ?? 0
+    let isPaused      = defaults?.bool(forKey: WatchSync.keyIsPaused) ?? false
+    let pausedSeconds = defaults?.integer(forKey: WatchSync.keyPausedSeconds) ?? 0
 
     let context: [String: Any] = [
         "courses": coursesData,
@@ -429,7 +894,9 @@ func pushFullStateToWatch() {
         "sessionActive": sessionActive,
         "courseName": courseName,
         "sessionID": sessionID,
-        "startDate": startDate
+        "startDate": startDate,
+        "isPaused": isPaused,
+        "pausedSeconds": pausedSeconds
     ]
     
     try? WCSession.default.updateApplicationContext(context)
@@ -449,6 +916,7 @@ struct PendingSession: Identifiable {
 struct ContentView: View {
     // ECCO LE VARIABILI CHE ERANO SPARITE!
     @StateObject var manager = StudyManager()
+    @StateObject private var cloudSessionSync = CloudSessionSync.shared
     @State private var selectedCourse: StudyCourse?
     @State private var pendingSession: PendingSession?
     @State private var selectedTab = 0
@@ -529,12 +997,16 @@ struct ContentView: View {
                 .onAppear {
                     checkPendingShortcut()
                     attemptToResumeSession()
+                    detectCloudActiveSession()
+                    manager.syncCompletedSessionsFromCloud()
                     completePendingSessionIfNeeded()
                     manager.activateWatchConnectivity()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     checkPendingShortcut()
                     attemptToResumeSession()
+                    detectCloudActiveSession()
+                    manager.syncCompletedSessionsFromCloud()
                     completePendingSessionIfNeeded()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .startSessionFromWatch)) { notification in
@@ -545,6 +1017,12 @@ struct ContentView: View {
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     UserDefaults(suiteName: "group.studioso")?.set(newPhase == .active, forKey: "appIsForeground")
+                    if newPhase == .active {
+                        checkPendingShortcut()
+                        attemptToResumeSession()
+                        detectCloudActiveSession()
+                        completePendingSessionIfNeeded()
+                    }
                 }
             }
                 
@@ -555,6 +1033,31 @@ struct ContentView: View {
                     if let course = manager.courses.first(where: { $0.name == courseName }) {
                         selectedCourse = course
                     }
+                }
+            }
+
+            private func detectCloudActiveSession() {
+                let defaults = AppConstants.sharedDefaults
+                guard !defaults.bool(forKey: "sharedSessionActive") else { return }
+
+                Task { @MainActor in
+                    guard let cloudSession = await cloudSessionSync.fetchActiveSession(),
+                          cloudSession.isRecent,
+                          let course = manager.courses.first(where: { $0.name == cloudSession.courseName })
+                    else { return }
+
+                    defaults.set(cloudSession.isPaused, forKey: "sharedIsPaused")
+                    defaults.set(cloudSession.pausedSeconds, forKey: "sharedPausedSeconds")
+                    defaults.set(cloudSession.startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+                    defaults.set(false, forKey: "sharedStopRequested")
+                    defaults.set("", forKey: "sharedStopSessionID")
+                    defaults.set(cloudSession.courseName, forKey: "sharedCourseName")
+                    defaults.set(cloudSession.sessionID, forKey: "sharedSessionID")
+                    defaults.set(true, forKey: "sharedSessionActive")
+                    defaults.synchronize()
+
+                    selectedTab = 1
+                    selectedCourse = course
                 }
             }
 
@@ -581,10 +1084,13 @@ struct ContentView: View {
                 else { return }
 
                 defaults.removeObject(forKey: AppConstants.sharedSessionEndedToCompleteKey)
+                defaults.synchronize()
                 selectedCourse = nil
                 selectedTab = 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    pendingSession = PendingSession(course: course, minutes: minutes)
+                    if pendingSession?.course.name != course.name {
+                        pendingSession = PendingSession(course: course, minutes: minutes)
+                    }
                 }
             }
         }
@@ -639,7 +1145,19 @@ struct ObiettiviView: View {
                         Spacer()
                     }
                     .padding(.vertical, 20)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .background(
+                        LinearGradient(
+                            colors: [Color.orange.opacity(0.20), Color.yellow.opacity(0.08), Color.primary.opacity(0.06)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(Color.orange.opacity(0.20), lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .padding(.horizontal, 20)
 
                     // ── Medaglie sbloccate ────────────────────────────────
@@ -765,10 +1283,21 @@ struct MedalRowView: View {
             .padding(14)
         }
         .buttonStyle(.plain)
-        .glassEffect(
-            medal.isUnlocked ? .regular.interactive() : .regular,
+        .background(
+            LinearGradient(
+                colors: medal.isUnlocked
+                    ? [Color.orange.opacity(0.16), Color.yellow.opacity(0.07), Color.primary.opacity(0.045)]
+                    : [Color.primary.opacity(0.075), Color.primary.opacity(0.035)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
             in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(medal.isUnlocked ? Color.orange.opacity(0.18) : Color.primary.opacity(0.07), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .sheet(isPresented: $showDetail) {
             MedalDetailSheet(medal: medal)
         }
@@ -1280,7 +1809,7 @@ struct SummaryView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .flatDashboardCard(cornerRadius: 20)
         }
         .buttonStyle(.plain)
     }
@@ -1383,7 +1912,7 @@ struct SummaryView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .flatDashboardCard(cornerRadius: 20)
         }
         .buttonStyle(.plain)
     }
@@ -1444,7 +1973,7 @@ struct SummaryView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .flatDashboardCard(cornerRadius: 20)
     }
 
     // MARK: - CONFRONTO MENSILE
@@ -1501,7 +2030,7 @@ struct SummaryView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .flatDashboardCard(cornerRadius: 20)
     }
 
     // MARK: - CARD COMPATTA 3: OBIETTIVI (solo materie studiate oggi)
@@ -1537,7 +2066,7 @@ struct SummaryView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .flatDashboardCard(cornerRadius: 20)
         }
         .buttonStyle(.plain)
     }
@@ -2187,6 +2716,7 @@ struct ActiveWorkoutView: View {
     @AppStorage("useAlternativeViews") private var useAlternativeViews = false
     @AppStorage("selectedBackgroundId") private var selectedBackgroundId = "noir"
     @AppStorage("isFocusModeEnabled") private var isFocusModeEnabled: Bool = false
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
     @AppStorage("sharedIsPaused",      store: UserDefaults(suiteName: "group.studioso")) var sharedIsPaused = false
     @AppStorage("sharedPausedSeconds", store: UserDefaults(suiteName: "group.studioso")) var sharedPausedSeconds = 0
     @AppStorage("sharedStartDate",     store: UserDefaults(suiteName: "group.studioso")) var sharedStartDate: Double = 0
@@ -2306,15 +2836,39 @@ struct ActiveWorkoutView: View {
                     Button {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         isPaused.toggle()
+
+                        let defaults = UserDefaults(suiteName: "group.studioso")
+
                         if isPaused {
                             pausedSeconds = secondsElapsed
                             withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
+
+                            defaults?.set(true, forKey: "sharedIsPaused")
+                            defaults?.set(pausedSeconds, forKey: "sharedPausedSeconds")
+
+                            if WCSession.default.activationState == .activated {
+                                WCSession.default.transferUserInfo(["action": "pause", "pausedSeconds": pausedSeconds])
+                            }
                         } else {
-                            startDate = Date()
-                            pauseEndDate = nil; activePauseMinutes = nil
+                            startDate = Date().addingTimeInterval(-TimeInterval(pausedSeconds))
+                            pauseEndDate = nil
+                            activePauseMinutes = nil
                             withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
+
+                            defaults?.set(false, forKey: "sharedIsPaused")
+                            defaults?.set(startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+
+                            if WCSession.default.activationState == .activated {
+                                WCSession.default.transferUserInfo([
+                                    "action": "resume",
+                                    "startDate": startDate.timeIntervalSince1970,
+                                    "pausedSeconds": pausedSeconds
+                                ])
+                            }
                         }
+
                         updateLiveActivity()
+                        WidgetCenter.shared.reloadAllTimelines()
                     } label: {
                         Image(systemName: isPaused ? "play.fill" : "pause.fill")
                             .font(.system(size: 22, weight: .bold))
@@ -2332,22 +2886,9 @@ struct ActiveWorkoutView: View {
                     pauseButton(minutes: 10, icon: "cup.and.saucer.fill", label: "Pausa 10 minuti")
                     pauseButton(minutes: 15, icon: "cup.and.saucer.fill", label: "Pausa 15 minuti")
 
-                    Button {
+                    SlideToEndSessionControl {
                         endSessionCleanly()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "xmark")
-                            Text("Termina sessione")
-                        }
-                        .font(.headline.bold())
-                        .foregroundColor(Color(red: 1.0, green: 0.3, blue: 0.3))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
                     }
-                    .glassEffect(
-                        .regular.tint(.red.opacity(0.25)).interactive(),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
                 }
                 .padding(.horizontal, 16)
                 .opacity(Double(expansionProgress))
@@ -2477,28 +3018,35 @@ struct ActiveWorkoutView: View {
                 if remaining <= 0 {
                     pauseEndDate = nil; activePauseMinutes = nil
                     pauseTotalSeconds = 0; pauseRemainingSeconds = 0
-                    isPaused = false; startDate = Date()
+                    isPaused = false
+                    startDate = Date().addingTimeInterval(-TimeInterval(pausedSeconds))
                     withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
                     updateLiveActivity()
+                    WidgetCenter.shared.reloadAllTimelines()
                 }
             }
             guard !isPaused else { return }
             syncWithLiveActivityBackgroundChanges()
-            secondsElapsed = pausedSeconds + Int(Date().timeIntervalSince(startDate))
+            secondsElapsed = Int(Date().timeIntervalSince(startDate))
+            publishCloudActiveSession()
         }
         .onReceive(NotificationCenter.default.publisher(for: AppConstants.pauseSession)) { _ in
             Task { @MainActor in
-                isPaused = true; pausedSeconds = secondsElapsed
+                isPaused = true
+                pausedSeconds = sharedPausedSeconds > 0 ? sharedPausedSeconds : secondsElapsed
                 withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
                 updateLiveActivity()
+                WidgetCenter.shared.reloadAllTimelines()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppConstants.resumeSession)) { _ in
             Task { @MainActor in
-                isPaused = false; startDate = Date()
+                isPaused = false
+                startDate = sharedStartDate > 0 ? Date(timeIntervalSince1970: sharedStartDate) : Date().addingTimeInterval(-TimeInterval(pausedSeconds))
                 pauseEndDate = nil; activePauseMinutes = nil
                 withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
                 updateLiveActivity()
+                WidgetCenter.shared.reloadAllTimelines()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: AppConstants.stopSession)) { _ in
@@ -2593,36 +3141,54 @@ struct ActiveWorkoutView: View {
             isPaused = sharedIsPaused; pausedSeconds = sharedPausedSeconds
             if !isPaused {
                 startDate = Date(timeIntervalSince1970: sharedStartDate)
-                secondsElapsed = pausedSeconds + Int(Date().timeIntervalSince(startDate))
+                secondsElapsed = Int(Date().timeIntervalSince(startDate))
             } else { secondsElapsed = pausedSeconds }
             isExpanded = isPaused
             targetHeight = isPaused ? expandedHeight : compactHeight
             if let existing = Activity<StudyActivityAttributes>.activities.first { liveActivity = existing }
             else { requestNewLiveActivity() }
+            publishCloudActiveSession(force: true)
         } else { startFreshSession() }
     }
 
     func startFreshSession() {
-        secondsElapsed = 0; isPaused = false; pausedSeconds = 0
-        startDate = Date(); isExpanded = false; targetHeight = compactHeight
-        let defaults = UserDefaults(suiteName: "group.studioso")
+        let now = Date()
         let newID = UUID().uuidString
-        defaults?.set(false,                        forKey: "sharedIsPaused")
-        defaults?.set(0,                            forKey: "sharedPausedSeconds")
-        defaults?.set(Date().timeIntervalSince1970, forKey: "sharedStartDate")
-        defaults?.set(false,                        forKey: "sharedStopRequested")
-        defaults?.set("",                           forKey: "sharedStopSessionID")
-        defaults?.set(course.name,                  forKey: "sharedCourseName")
-        defaults?.set(newID,                        forKey: "sharedSessionID")
-        defaults?.set(true,                         forKey: "sharedSessionActive")
-        sharedIsPaused = false; sharedPausedSeconds = 0
-        sharedStartDate = Date().timeIntervalSince1970
-        sharedStopRequested = false; sharedStopSessionID = ""
-        sharedCourseName = course.name; sharedSessionID = newID; sharedSessionActive = true
+
+        secondsElapsed = 0
+        isPaused = false
+        pausedSeconds = 0
+        startDate = now
+        isExpanded = false
+        targetHeight = compactHeight
+
+        let defaults = UserDefaults(suiteName: "group.studioso")
+        defaults?.set(false,                  forKey: "sharedIsPaused")
+        defaults?.set(0,                      forKey: "sharedPausedSeconds")
+        defaults?.set(now.timeIntervalSince1970, forKey: "sharedStartDate")
+        defaults?.set(false,                  forKey: "sharedStopRequested")
+        defaults?.set("",                     forKey: "sharedStopSessionID")
+        defaults?.set(course.name,            forKey: "sharedCourseName")
+        defaults?.set(newID,                  forKey: "sharedSessionID")
+        defaults?.set(true,                   forKey: "sharedSessionActive")
+
+        sharedIsPaused = false
+        sharedPausedSeconds = 0
+        sharedStartDate = now.timeIntervalSince1970
+        sharedStopRequested = false
+        sharedStopSessionID = ""
+        sharedCourseName = course.name
+        sharedSessionID = newID
+        sharedSessionActive = true
+
         requestNewLiveActivity()
+        publishCloudActiveSession(force: true)
+        pushFullStateToWatch()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func requestNewLiveActivity() {
+        guard liveActivitiesEnabled else { return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         Task {
             for activity in Activity<StudyActivityAttributes>.activities {
@@ -2640,24 +3206,80 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    func endSessionCleanly() {
+    func endSessionCleanly(finalMinutes: Int? = nil) {
         Task { await liveActivity?.end(nil, dismissalPolicy: .immediate) }
         let defaults = UserDefaults(suiteName: "group.studioso")
+        let sessionIDToClear = sharedSessionID.isEmpty ? defaults?.string(forKey: "sharedSessionID") : sharedSessionID
+        let completedMinutes = finalMinutes ?? consumeSharedCompletedMinutes() ?? max(1, secondsElapsed / 60)
         defaults?.set(false, forKey: "sharedSessionActive")
         defaults?.set(false, forKey: "sharedStopRequested")
+        defaults?.set("",    forKey: "sharedStopSessionID")
+        defaults?.set(false, forKey: "sharedIsPaused")
+        defaults?.set(0,     forKey: "sharedPausedSeconds")
+        defaults?.set(0,     forKey: "sharedStartDate")
         defaults?.set("",    forKey: "sharedCourseName")
-        sharedSessionActive = false; sharedStopRequested = false
-        onEnd(max(1, secondsElapsed / 60))
+        defaults?.set("",    forKey: "sharedSessionID")
+        sharedSessionActive = false
+        sharedStopRequested = false
+        sharedStopSessionID = ""
+        sharedIsPaused = false
+        sharedPausedSeconds = 0
+        sharedStartDate = 0
+        sharedCourseName = ""
+        sharedSessionID = ""
+        onEnd(completedMinutes)
+        Task { await CloudSessionSync.shared.clearActiveSession(sessionID: sessionIDToClear) }
         pushFullStateToWatch()
+        WidgetCenter.shared.reloadTimelines(ofKind: "widgetstudio")
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    private func publishCloudActiveSession(force: Bool = false) {
+        guard sharedSessionActive || AppConstants.sharedDefaults.bool(forKey: "sharedSessionActive") else { return }
+        let sessionID = sharedSessionID.isEmpty ? AppConstants.sharedDefaults.string(forKey: "sharedSessionID") ?? UUID().uuidString : sharedSessionID
+        Task {
+            await CloudSessionSync.shared.publishActiveSession(
+                sessionID: sessionID,
+                courseName: course.name,
+                startDate: startDate,
+                isPaused: isPaused,
+                pausedSeconds: pausedSeconds,
+                force: force
+            )
+        }
+    }
+
+    private func consumeSharedCompletedMinutes() -> Int? {
+        let defaults = AppConstants.sharedDefaults
+        guard let sessionData = defaults.dictionary(forKey: AppConstants.sharedSessionEndedToCompleteKey),
+              let courseName = sessionData["courseName"] as? String,
+              courseName == course.name,
+              let minutes = sessionData["minutes"] as? Int
+        else { return nil }
+
+        defaults.removeObject(forKey: AppConstants.sharedSessionEndedToCompleteKey)
+        defaults.synchronize()
+        return minutes
+    }
+
     func syncWithLiveActivityBackgroundChanges() {
-        if sharedStopRequested && sharedStopSessionID == sharedSessionID { endSessionCleanly(); return }
-        if sharedIsPaused != isPaused {
-            isPaused = sharedIsPaused; pausedSeconds = sharedPausedSeconds
-            if !isPaused { startDate = Date(timeIntervalSince1970: sharedStartDate) }
-            secondsElapsed = isPaused ? pausedSeconds : pausedSeconds + Int(Date().timeIntervalSince(startDate))
+        // Stop proveniente da widget/Live Activity/Watch: non aspettare che coincida sempre l'id,
+        // perché alcuni intent girano in un processo diverso e possono chiudere lo stato prima.
+        if sharedStopRequested || !sharedSessionActive {
+            endSessionCleanly()
+            return
+        }
+
+        let incomingStart = sharedStartDate > 0 ? Date(timeIntervalSince1970: sharedStartDate) : startDate
+        let startChanged = abs(incomingStart.timeIntervalSince(startDate)) > 0.5
+        let pauseChanged = sharedIsPaused != isPaused
+        let pausedChanged = sharedPausedSeconds != pausedSeconds
+
+        if pauseChanged || pausedChanged || startChanged {
+            isPaused = sharedIsPaused
+            pausedSeconds = sharedPausedSeconds
+            startDate = incomingStart
+            secondsElapsed = isPaused ? pausedSeconds : Int(Date().timeIntervalSince(startDate))
             withAnimation(fluidSpring) {
                 isExpanded = isPaused
                 targetHeight = isPaused ? expandedHeight : compactHeight
@@ -2666,8 +3288,22 @@ struct ActiveWorkoutView: View {
     }
 
     func updateLiveActivity() {
-        sharedIsPaused = isPaused; sharedPausedSeconds = pausedSeconds
+        sharedIsPaused = isPaused
+        sharedPausedSeconds = pausedSeconds
         sharedStartDate = startDate.timeIntervalSince1970
+
+        let defaults = UserDefaults(suiteName: "group.studioso")
+        defaults?.set(isPaused, forKey: "sharedIsPaused")
+        defaults?.set(pausedSeconds, forKey: "sharedPausedSeconds")
+        defaults?.set(startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+        defaults?.set(true, forKey: "sharedSessionActive")
+        defaults?.set(course.name, forKey: "sharedCourseName")
+
+        publishCloudActiveSession(force: true)
+        pushFullStateToWatch()
+        WidgetCenter.shared.reloadTimelines(ofKind: "widgetstudio")
+        WidgetCenter.shared.reloadAllTimelines()
+
         Task {
             await liveActivity?.update(.init(
                 state: StudyActivityAttributes.ContentState(
@@ -2676,6 +3312,100 @@ struct ActiveWorkoutView: View {
         }
     }
 }
+
+struct SlideToEndSessionControl: View {
+    var onComplete: () -> Void
+
+    @State private var dragOffset: CGFloat = 0
+    @State private var didComplete = false
+
+    private let height: CGFloat = 58
+    private let thumbSize: CGFloat = 50
+    private let horizontalInset: CGFloat = 5
+
+    var body: some View {
+        GeometryReader { geometry in
+            let maxOffset = max(0, geometry.size.width - thumbSize - horizontalInset * 2)
+            let progress = max(0, min(1, dragOffset / max(maxOffset, 1)))
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.red.opacity(0.13))
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.red.opacity(0.30), lineWidth: 1)
+                    )
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.red.opacity(0.38), Color.red.opacity(0.20)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: thumbSize + horizontalInset + progress * maxOffset)
+
+                HStack(spacing: 6) {
+                    Spacer(minLength: thumbSize + 12)
+                    Text(progress > 0.82 ? "rilascia per terminare" : "scorri per terminare la sessione")
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .foregroundStyle(Color.red.opacity(0.92))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Spacer(minLength: thumbSize + 12)
+                }
+                .opacity(Double(1 - progress * 0.45))
+
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: thumbSize, height: thumbSize)
+                    .overlay(
+                        Image(systemName: didComplete ? "checkmark" : "chevron.right")
+                            .font(.system(size: 18, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                    )
+                    .shadow(color: Color.red.opacity(0.36), radius: 10, x: 0, y: 5)
+                    .offset(x: horizontalInset + dragOffset)
+                    .highPriorityGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard !didComplete else { return }
+                                dragOffset = min(max(0, value.translation.width), maxOffset)
+                            }
+                            .onEnded { _ in
+                                guard !didComplete else { return }
+
+                                if dragOffset >= maxOffset * 0.88 {
+                                    didComplete = true
+                                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                                    withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+                                        dragOffset = maxOffset
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                        onComplete()
+                                    }
+                                } else {
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    withAnimation(.spring(response: 0.34, dampingFraction: 0.74)) {
+                                        dragOffset = 0
+                                    }
+                                }
+                            }
+                    )
+            }
+            .frame(height: height)
+            .glassEffect(
+                .regular.tint(.red.opacity(0.18)).interactive(),
+                in: Capsule()
+            )
+        }
+        .frame(height: height)
+        .accessibilityLabel("Scorri per terminare la sessione")
+        .accessibilityHint("Trascina il controllo rosso fino alla fine per terminare")
+    }
+}
+
 struct SessionScoreRing: View {
     let effort: Int
     let concentration: Int
@@ -4229,7 +4959,9 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section {
+                    AccountSettingsSummaryRow()
                     SettingsRow(title: "Notifiche", icon: "bell.fill", color: .red, destination: NotificationsSettingsView())
+                    SettingsRow(title: "Live Activity", icon: "bolt.rectangle.fill", color: .green, destination: LiveActivitySettingsView())
                     SettingsRow(title: "Focus", icon: "flame.fill", color: .orange, destination: focusSettingsView())
          
                     SettingsRow(title: "Vista studio", icon: "stopwatch.fill", color: .blue, destination: StudySettingsView(manager: manager))
@@ -4249,6 +4981,130 @@ struct SettingsView: View {
         }
     }
 }
+
+struct AccountSettingsSummaryRow: View {
+    @StateObject private var cloudSessionSync = CloudSessionSync.shared
+
+    var body: some View {
+        NavigationLink(destination: AccountSettingsView()) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(cloudSessionSync.accountState.color)
+                        .frame(width: 46, height: 46)
+                    Image(systemName: cloudSessionSync.accountState.icon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Account")
+                        .font(.system(.body, design: .rounded).weight(.semibold))
+                    Text(cloudSessionSync.accountIdentifier)
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(cloudSessionSync.accountState.title)
+                        .font(.system(.footnote, design: .rounded))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 10)
+        }
+        .task {
+            await cloudSessionSync.refreshAccountStatus()
+        }
+    }
+}
+
+struct AccountSettingsView: View {
+    @StateObject private var cloudSessionSync = CloudSessionSync.shared
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(cloudSessionSync.accountState.color)
+                            .frame(width: 32, height: 32)
+                        Image(systemName: cloudSessionSync.accountState.icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(cloudSessionSync.accountState.title)
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                        Text(cloudSessionSync.accountIdentifier)
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .foregroundColor(.primary)
+                        Text(cloudSessionSync.accountState.detail)
+                            .font(.system(.footnote, design: .rounded))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 6)
+
+                Button {
+                    Task { await cloudSessionSync.refreshAccountStatus() }
+                } label: {
+                    Label("Aggiorna stato", systemImage: "arrow.clockwise")
+                }
+            } footer: {
+                Text("Studio usa il database privato iCloud dell'Apple ID del dispositivo. Le sessioni attive vengono rilevate solo sugli altri dispositivi collegati allo stesso account.")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("Account")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await cloudSessionSync.refreshAccountStatus()
+        }
+    }
+}
+
+struct LiveActivitySettingsView: View {
+    @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
+
+    var body: some View {
+        List {
+            Section {
+                Toggle(isOn: $liveActivitiesEnabled) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.green)
+                                .frame(width: 32, height: 32)
+                            Image(systemName: "bolt.rectangle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        Text("Attiva Live Activity")
+                            .font(.system(.body, design: .rounded))
+                    }
+                }
+                .tint(.green)
+                .onChange(of: liveActivitiesEnabled) { _, enabled in
+                    guard !enabled else { return }
+                    Task {
+                        for activity in Activity<StudyActivityAttributes>.activities {
+                            await activity.end(nil, dismissalPolicy: .immediate)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Quando e disattivata, le nuove sessioni non creano una Live Activity. Il timer, i dati locali e la sincronizzazione iCloud della sessione attiva continuano a funzionare.")
+                    .font(.system(.footnote, design: .rounded))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle("Live Activity")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 struct WatchSettingsView: View {
     @AppStorage("watchCompatibilityEnabled") private var watchCompatibilityEnabled = false
 
