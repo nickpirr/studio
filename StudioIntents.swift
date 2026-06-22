@@ -31,9 +31,27 @@ struct StopStudySessionIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         let defaults = UserDefaults(suiteName: "group.studioso")   // ← era "group.com.niccolo.studio"
         let sessionID = defaults?.string(forKey: "sharedSessionID") ?? ""
+        let courseName = defaults?.string(forKey: "sharedCourseName") ?? ""
+        let startDouble = defaults?.double(forKey: "sharedStartDate") ?? 0
+        let pausedSeconds = defaults?.integer(forKey: "sharedPausedSeconds") ?? 0
+        let isPaused = defaults?.bool(forKey: "sharedIsPaused") ?? false
+
+        if !courseName.isEmpty, defaults?.bool(forKey: "sharedSessionActive") == true {
+            let startDate = startDouble > 0 ? Date(timeIntervalSince1970: startDouble) : Date()
+            let elapsed = isPaused ? pausedSeconds : Int(Date().timeIntervalSince(startDate))
+            let minutes = max(1, elapsed / 60)
+            defaults?.set(["courseName": courseName, "minutes": minutes], forKey: "sharedSessionEndedToComplete")
+        }
+
         defaults?.set(true, forKey: "sharedStopRequested")
         defaults?.set(sessionID, forKey: "sharedStopSessionID")
         defaults?.set(false, forKey: "sharedSessionActive")   // ← aggiunto
+        defaults?.set(false, forKey: "sharedIsPaused")
+        defaults?.set(0, forKey: "sharedPausedSeconds")
+        defaults?.set(0, forKey: "sharedStartDate")
+        defaults?.set("", forKey: "sharedCourseName")
+        defaults?.set("", forKey: "sharedSessionID")
+        defaults?.synchronize()
 
         let isForeground = defaults?.bool(forKey: "appIsForeground") ?? false
         if !isForeground {
@@ -109,5 +127,34 @@ struct WidgetCourse: Codable, Identifiable {
     let name: String
     let icon: String
     let colorName: String
+}
+
+struct WidgetCourseStat: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let icon: String
+    let colorName: String
+    let minutes: Int
+}
+
+struct WidgetGradePoint: Codable, Identifiable {
+    var id: Int { dayIndex }
+    let dayIndex: Int
+    let effort: Double
+    let concentration: Double
+    let satisfaction: Double
+
+    var overall: Double {
+        let values = [effort, concentration, satisfaction].filter { $0 > 0 }
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
+    }
+}
+
+struct WidgetGradeSummary: Codable {
+    let averageEffort: Double
+    let averageConcentration: Double
+    let averageSatisfaction: Double
+    let dailyPoints: [WidgetGradePoint]
 }
 

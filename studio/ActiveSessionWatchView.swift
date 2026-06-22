@@ -16,9 +16,15 @@ struct ActiveSessionWatchView: View {
                 .font(.headline)
                 .lineLimit(1)
 
-            Text(connector.startDate, style: .timer)
-                .font(.system(size: 36, weight: .bold, design: .rounded))
-                .monospacedDigit()
+            if connector.isPaused {
+                Text(formatTime(connector.pausedSeconds))
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            } else {
+                Text(connector.startDate, style: .timer)
+                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
 
             Button(role: .destructive) {
                 connector.stopSession()
@@ -30,5 +36,12 @@ struct ActiveSessionWatchView: View {
             .tint(.red)
         }
         .padding()
+    }
+
+    private func formatTime(_ seconds: Int) -> String {
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 }

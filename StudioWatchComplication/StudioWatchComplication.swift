@@ -14,12 +14,14 @@ struct StudioComplicationEntry: TimelineEntry {
     let sessionActive: Bool
     let courseName: String
     let startDate: Date
+    let isPaused: Bool
+    let pausedSeconds: Int
     let weeklyMinutes: [Int]
 }
 
 struct StudioComplicationProvider: TimelineProvider {
     func placeholder(in context: Context) -> StudioComplicationEntry {
-        StudioComplicationEntry(date: Date(), sessionActive: false, courseName: "", startDate: Date(), weeklyMinutes: [20, 40, 10, 60, 30, 0, 50])
+        StudioComplicationEntry(date: Date(), sessionActive: false, courseName: "", startDate: Date(), isPaused: false, pausedSeconds: 0, weeklyMinutes: [20, 40, 10, 60, 30, 0, 50])
     }
     func getSnapshot(in context: Context, completion: @escaping (StudioComplicationEntry) -> Void) {
         completion(currentEntry())
@@ -34,8 +36,10 @@ struct StudioComplicationProvider: TimelineProvider {
         let name = defaults?.string(forKey: WatchSync.keyCourseName) ?? ""
         let startInterval = defaults?.double(forKey: WatchSync.keyStartDate) ?? 0
         let start = startInterval > 0 ? Date(timeIntervalSince1970: startInterval) : Date()
+        let isPaused = defaults?.bool(forKey: WatchSync.keyIsPaused) ?? false
+        let pausedSeconds = defaults?.integer(forKey: WatchSync.keyPausedSeconds) ?? 0
         let weekly = defaults?.array(forKey: WatchSync.keyWeeklyMinutes) as? [Int] ?? Array(repeating: 0, count: 7)
-        return StudioComplicationEntry(date: Date(), sessionActive: active, courseName: name, startDate: start, weeklyMinutes: weekly)
+        return StudioComplicationEntry(date: Date(), sessionActive: active, courseName: name, startDate: start, isPaused: isPaused, pausedSeconds: pausedSeconds, weeklyMinutes: weekly)
     }
 }
 
@@ -43,6 +47,13 @@ struct StudioComplicationProvider: TimelineProvider {
 struct StudioTimerView: View {
     let entry: StudioComplicationEntry
     @Environment(\.widgetFamily) var family
+
+    private var pausedTimeText: String {
+        let h = entry.pausedSeconds / 3600
+        let m = (entry.pausedSeconds % 3600) / 60
+        let s = entry.pausedSeconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
 
     var body: some View {
         switch family {
@@ -58,7 +69,11 @@ struct StudioTimerView: View {
             if entry.sessionActive {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.courseName).font(.caption2.weight(.semibold)).lineLimit(1)
-                    Text(entry.startDate, style: .timer).font(.title3.weight(.bold)).monospacedDigit()
+                    if entry.isPaused {
+                        Text(pausedTimeText).font(.title3.weight(.bold)).monospacedDigit()
+                    } else {
+                        Text(entry.startDate, style: .timer).font(.title3.weight(.bold)).monospacedDigit()
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 2) {
@@ -75,7 +90,11 @@ struct StudioTimerView: View {
             if entry.sessionActive {
                 VStack(spacing: 0) {
                     Image(systemName: "play.fill").font(.caption2)
-                    Text(entry.startDate, style: .timer).font(.caption2).monospacedDigit().minimumScaleFactor(0.6)
+                    if entry.isPaused {
+                        Text(pausedTimeText).font(.caption2).monospacedDigit().minimumScaleFactor(0.6)
+                    } else {
+                        Text(entry.startDate, style: .timer).font(.caption2).monospacedDigit().minimumScaleFactor(0.6)
+                    }
                 }
             } else {
                 Image(systemName: "play.circle").font(.title3)
@@ -87,7 +106,11 @@ struct StudioTimerView: View {
     private var corner: some View {
         Group {
             if entry.sessionActive {
-                Text(entry.startDate, style: .timer).font(.system(size: 14, weight: .bold)).monospacedDigit()
+                if entry.isPaused {
+                    Text(pausedTimeText).font(.system(size: 14, weight: .bold)).monospacedDigit()
+                } else {
+                    Text(entry.startDate, style: .timer).font(.system(size: 14, weight: .bold)).monospacedDigit()
+                }
             } else {
                 Image(systemName: "play.circle")
             }
@@ -98,7 +121,11 @@ struct StudioTimerView: View {
     private var inline: some View {
         Group {
             if entry.sessionActive {
-                Text("\(entry.courseName) · \(entry.startDate, style: .timer)")
+                if entry.isPaused {
+                    Text("\(entry.courseName) · \(pausedTimeText)")
+                } else {
+                    Text("\(entry.courseName) · \(entry.startDate, style: .timer)")
+                }
             } else {
                 Text("Studio: nessuna sessione")
             }
