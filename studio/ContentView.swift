@@ -1749,7 +1749,8 @@ struct SummaryView: View {
             guard let day = cal.date(byAdding: .day, value: offset, to: weekStart) else { return 0 }
             return weekSessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
         }
-
+//test
+        
         let delta = totalWeek - totalPrevWeek
         let percentChange: Double? = totalPrevWeek > 0 ? (Double(delta) / Double(totalPrevWeek)) * 100 : nil
         let isUp = delta >= 0
@@ -4954,28 +4955,63 @@ struct EndSessionView: View {
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var manager: StudyManager
-    
+
     var body: some View {
-        NavigationView {
-            List {
+        NavigationStack {
+            Form {
                 Section {
                     AccountSettingsSummaryRow()
-                    SettingsRow(title: "Notifiche", icon: "bell.fill", color: .red, destination: NotificationsSettingsView())
-                    SettingsRow(title: "Live Activity", icon: "bolt.rectangle.fill", color: .green, destination: LiveActivitySettingsView())
-                    SettingsRow(title: "Focus", icon: "flame.fill", color: .orange, destination: focusSettingsView())
-         
-                    SettingsRow(title: "Vista studio", icon: "stopwatch.fill", color: .blue, destination: StudySettingsView(manager: manager))
-                    SettingsRow(title: "Apple Watch", icon: "applewatch", color: .gray, destination: WatchSettingsView())
+                }
+
+                Section("Studio") {
+                    SettingsRow(
+                        title: "Vista studio",
+                        subtitle: "Sfondi e aspetto delle sessioni",
+                        icon: "stopwatch.fill",
+                        color: .blue,
+                        destination: StudySettingsView(manager: manager)
+                    )
+                    SettingsRow(
+                        title: "Notifiche",
+                        subtitle: "Promemoria giornalieri",
+                        icon: "bell.fill",
+                        color: .red,
+                        destination: NotificationsSettingsView()
+                    )
+                }
+
+                Section("Sistema") {
+                    SettingsRow(
+                        title: "Live Activity",
+                        subtitle: "Timer nella schermata di blocco",
+                        icon: "bolt.rectangle.fill",
+                        color: .green,
+                        destination: LiveActivitySettingsView()
+                    )
+                    SettingsRow(
+                        title: "Focus",
+                        subtitle: "Modalità strict e Focus di sistema",
+                        icon: "flame.fill",
+                        color: .orange,
+                        destination: focusSettingsView()
+                    )
+                    SettingsRow(
+                        title: "Apple Watch",
+                        subtitle: "Controlli e sincronizzazione",
+                        icon: "applewatch",
+                        color: .gray,
+                        destination: WatchSettingsView()
+                    )
                 }
             }
             .navigationTitle("Impostazioni")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Fine") {
                         dismiss()
                     }
-                    .font(.headline)
+                    .fontWeight(.semibold)
                 }
             }
         }
@@ -4987,29 +5023,27 @@ struct AccountSettingsSummaryRow: View {
 
     var body: some View {
         NavigationLink(destination: AccountSettingsView()) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(cloudSessionSync.accountState.color)
-                        .frame(width: 46, height: 46)
-                    Image(systemName: cloudSessionSync.accountState.icon)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundColor(.white)
-                }
+            HStack(spacing: 12) {
+                AppleSettingsIcon(
+                    systemName: cloudSessionSync.accountState.icon,
+                    color: cloudSessionSync.accountState.color,
+                    size: 44,
+                    iconSize: 21
+                )
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("Account")
-                        .font(.system(.body, design: .rounded).weight(.semibold))
+                        .font(.body)
                     Text(cloudSessionSync.accountIdentifier)
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                        .foregroundColor(.primary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Text(cloudSessionSync.accountState.title)
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundColor(.secondary)
+                        .font(.footnote)
+                        .foregroundStyle(cloudSessionSync.accountState.color)
                 }
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 4)
         }
         .task {
             await cloudSessionSync.refreshAccountStatus()
@@ -5021,30 +5055,26 @@ struct AccountSettingsView: View {
     @StateObject private var cloudSessionSync = CloudSessionSync.shared
 
     var body: some View {
-        List {
+        Form {
             Section {
-                HStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(cloudSessionSync.accountState.color)
-                            .frame(width: 32, height: 32)
-                        Image(systemName: cloudSessionSync.accountState.icon)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                    }
+                HStack(alignment: .top, spacing: 12) {
+                    AppleSettingsIcon(
+                        systemName: cloudSessionSync.accountState.icon,
+                        color: cloudSessionSync.accountState.color
+                    )
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text(cloudSessionSync.accountState.title)
-                            .font(.system(.body, design: .rounded).weight(.semibold))
                         Text(cloudSessionSync.accountIdentifier)
-                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                            .foregroundColor(.primary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                         Text(cloudSessionSync.accountState.detail)
-                            .font(.system(.footnote, design: .rounded))
-                            .foregroundColor(.secondary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
 
                 Button {
                     Task { await cloudSessionSync.refreshAccountStatus() }
@@ -5053,8 +5083,6 @@ struct AccountSettingsView: View {
                 }
             } footer: {
                 Text("Studio usa il database privato iCloud dell'Apple ID del dispositivo. Le sessioni attive vengono rilevate solo sugli altri dispositivi collegati allo stesso account.")
-                    .font(.system(.footnote, design: .rounded))
-                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("Account")
@@ -5069,21 +5097,10 @@ struct LiveActivitySettingsView: View {
     @AppStorage("liveActivitiesEnabled") private var liveActivitiesEnabled = true
 
     var body: some View {
-        List {
+        Form {
             Section {
                 Toggle(isOn: $liveActivitiesEnabled) {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(.green)
-                                .frame(width: 32, height: 32)
-                            Image(systemName: "bolt.rectangle.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                        Text("Attiva Live Activity")
-                            .font(.system(.body, design: .rounded))
-                    }
+                    SettingsToggleLabel(title: "Live Activity", icon: "bolt.rectangle.fill", color: .green)
                 }
                 .tint(.green)
                 .onChange(of: liveActivitiesEnabled) { _, enabled in
@@ -5096,8 +5113,6 @@ struct LiveActivitySettingsView: View {
                 }
             } footer: {
                 Text("Quando e disattivata, le nuove sessioni non creano una Live Activity. Il timer, i dati locali e la sincronizzazione iCloud della sessione attiva continuano a funzionare.")
-                    .font(.system(.footnote, design: .rounded))
-                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("Live Activity")
@@ -5109,27 +5124,14 @@ struct WatchSettingsView: View {
     @AppStorage("watchCompatibilityEnabled") private var watchCompatibilityEnabled = false
 
     var body: some View {
-        List {
+        Form {
             Section {
                 Toggle(isOn: $watchCompatibilityEnabled) {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(.gray)
-                                .frame(width: 32, height: 32)
-                            Image(systemName: "applewatch")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                        Text("Compatibilità Apple Watch")
-                            .font(.system(.body, design: .rounded))
-                    }
+                    SettingsToggleLabel(title: "Apple Watch", icon: "applewatch", color: .gray)
                 }
                 .tint(.green)
             } footer: {
                 Text("Avvia, ferma e monitora le sessioni di studio direttamente da Apple Watch. Il timer si sincronizza automaticamente in entrambe le direzioni.")
-                    .font(.system(.footnote, design: .rounded))
-                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("Apple Watch")
@@ -5137,30 +5139,59 @@ struct WatchSettingsView: View {
     }
 }
 
-// MARK: - RIGA IMPOSTAZIONI STILE APPLE (AGGIORNATA)
-struct SettingsRow<Destination: View>: View {
+struct AppleSettingsIcon: View {
+    let systemName: String
+    let color: Color
+    var size: CGFloat = 30
+    var iconSize: CGFloat = 15
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+            .fill(color)
+            .frame(width: size, height: size)
+            .overlay {
+                Image(systemName: systemName)
+                    .font(.system(size: iconSize, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+    }
+}
+
+struct SettingsToggleLabel: View {
     let title: String
     let icon: String
     let color: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AppleSettingsIcon(systemName: icon, color: color)
+            Text(title)
+        }
+    }
+}
+
+struct SettingsRow<Destination: View>: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let color: Color
     let destination: Destination
-    
+
     var body: some View {
         NavigationLink(destination: destination) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(color)
-                        .frame(width: 32, height: 32)
-                    
-                    Image(systemName: icon)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+            HStack(spacing: 12) {
+                AppleSettingsIcon(systemName: icon, color: color)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                
-                Text(title)
-                    .font(.system(.body, design: .rounded))
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         }
     }
 }
@@ -5175,55 +5206,35 @@ struct NotificationsSettingsView: View {
     @State private var showPermissionDeniedAlert = false
     
     var body: some View {
-        ZStack {
-            // Sfondo standard del raggruppamento per far risaltare il liquid glass
-            
-            List {
-                Section {
-                    Toggle(isOn: $isNotificationsEnabled) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(.red)
-                                    .frame(width: 32, height: 32)
-                                
-                                Image(systemName: "bell.fill")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            
-                            Text("Notifiche")
-                                .font(.system(.body, design: .rounded))
-                        }
-                    }
-                    .tint(.green)
-                    .onChange(of: isNotificationsEnabled) { _, newValue in
-                        handleToggleChange(newValue)
-                    }
-                } footer: {
-                    Text("Ricevi promemoria giornalieri per ricordarti di studiare e rimanere in pari con i tuoi obiettivi settimanali.")
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundColor(.secondary)
+        Form {
+            Section {
+                Toggle(isOn: $isNotificationsEnabled) {
+                    SettingsToggleLabel(title: "Notifiche", icon: "bell.fill", color: .red)
+                }
+                .tint(.green)
+                .onChange(of: isNotificationsEnabled) { _, newValue in
+                    handleToggleChange(newValue)
+                }
+            } footer: {
+                Text("Ricevi promemoria giornalieri per ricordarti di studiare e rimanere in pari con i tuoi obiettivi settimanali.")
+            }
+        }
+        .navigationTitle("Notifiche")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            checkNotificationStatus()
+        }
+        .alert("Notifiche Disattivate", isPresented: $showPermissionDeniedAlert) {
+            Button("Impostazioni") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    openURL(url)
                 }
             }
-            .navigationTitle("Notifiche")
-            .navigationBarTitleDisplayMode(.inline)
-            .onAppear {
-                checkNotificationStatus()
+            Button("Annulla", role: .cancel) {
+                isNotificationsEnabled = false
             }
-            .alert("Notifiche Disattivate", isPresented: $showPermissionDeniedAlert) {
-                Button("Impostazioni") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        // 3. SOSTITUZIONE DI UIApplication.shared CON openURL
-                        openURL(url)
-                    }
-                }
-                Button("Annulla", role: .cancel) {
-                    isNotificationsEnabled = false
-                }
-            } message: {
-                Text("Le notifiche per l'app Studio sono disabilitate nelle impostazioni di sistema. Desideri abilitarle?")
-            }
+        } message: {
+            Text("Le notifiche per l'app Studio sono disabilitate nelle impostazioni di sistema. Desideri abilitarle?")
         }
     }
     // Controlla lo stato attuale del sistema operativo
@@ -5304,75 +5315,35 @@ struct focusSettingsView: View {
     @AppStorage("isFocusModeEnabled") private var isFocusModeEnabled: Bool = false
 
     var body: some View {
-        List {
-            // Sezione esistente — toggle Focus Mode
+        Form {
             Section {
                 Toggle(isOn: $isFocusModeEnabled) {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(.orange)
-                                .frame(width: 32, height: 32)
-                            Image(systemName: "flame.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                        Text("Modalità Focus Strict")
-                            .font(.system(.body, design: .rounded))
-                    }
+                    SettingsToggleLabel(title: "Focus Strict", icon: "flame.fill", color: .orange)
                 }
                 .tint(.orange)
             } footer: {
-                Text("La Modalità Focus Strict impedisce allo schermo di spegnersi e avvia il salvaschermo anti burn-in. Solo le sessioni con il Focus attivo sbloccano le medaglie.")
-                    .font(.system(.footnote, design: .rounded))
+                Text("Impedisce allo schermo di spegnersi e avvia il salvaschermo anti burn-in. Solo le sessioni con Focus attivo sbloccano le medaglie.")
             }
 
-            // NUOVA SEZIONE — Focus di sistema
             Section {
                 Toggle(isOn: $focusModeAutoActivate) {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(.indigo)
-                                .frame(width: 32, height: 32)
-                            Image(systemName: "moon.fill")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.white)
-                        }
-                        Text("Attiva Focus di sistema")
-                            .font(.system(.body, design: .rounded))
-                    }
+                    SettingsToggleLabel(title: "Attiva automaticamente", icon: "moon.fill", color: .indigo)
                 }
                 .tint(.indigo)
 
                 if focusModeAutoActivate {
                     Button {
-                        // Apre direttamente le impostazioni Focus del sistema
                         if let url = URL(string: "App-prefs:FOCUS") {
                             openURL(url)
                         }
                     } label: {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(.gray.opacity(0.3))
-                                    .frame(width: 32, height: 32)
-                                Image(systemName: "arrow.up.right")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(.primary)
-                            }
-                            Text("Configura Focus nelle Impostazioni")
-                                .font(.system(.body, design: .rounded))
-                                .foregroundColor(.primary)
-                        }
+                        Label("Configura Focus", systemImage: "arrow.up.forward.app")
                     }
-                    .buttonStyle(.plain)
                 }
             } header: {
                 Text("Focus di sistema")
             } footer: {
-                Text("Quando avvii una sessione, Studio suggerisce al sistema di attivare il Focus che hai associato all'app. Configura il Focus 'Studio' nelle Impostazioni di sistema e aggiungi Studio alle app consentite per abilitarlo.")
-                    .font(.system(.footnote, design: .rounded))
+                Text("Quando avvii una sessione, Studio suggerisce al sistema di attivare il Focus associato all'app. Configuralo nelle Impostazioni di sistema e aggiungi Studio alle app consentite.")
             }
         }
         .navigationTitle("Focus")
@@ -5384,37 +5355,18 @@ struct musicSeetingsView: View {
     @AppStorage("showMusicPlayer") private var showMusicPlayer: Bool = false
     
     var body: some View {
-        ZStack {
-            Color(UIColor.systemGroupedBackground).ignoresSafeArea()
-            
-            List {
-                Section {
-                    Toggle(isOn: $showMusicPlayer) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(.pink)
-                                    .frame(width: 32, height: 32)
-                                
-                                Image(systemName: "music.note")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(.white)
-                            }
-                            
-                            Text("Mostra controlli musicali")
-                                .font(.system(.body, design: .rounded))
-                        }
-                    }
-                    .tint(.pink)
-                } footer: {
-                    Text("La musica può aiutare a concentrarsi. Se questa funzione è attiva, apparirà un player nativo in stile Liquid Glass durante la sessione di studio per controllare l'audio del telefono (Apple Music, Spotify, ecc.).")
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundColor(.secondary)
+        Form {
+            Section {
+                Toggle(isOn: $showMusicPlayer) {
+                    SettingsToggleLabel(title: "Controlli musicali", icon: "music.note", color: .pink)
                 }
+                .tint(.pink)
+            } footer: {
+                Text("Mostra un player nativo durante la sessione di studio per controllare l'audio del telefono, inclusi Apple Music e Spotify.")
             }
-            .navigationTitle("Musica")
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .navigationTitle("Musica")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 // MODELLO PER GESTIRE GLI SFONDI ALTERNATIVI
@@ -5535,98 +5487,92 @@ struct StudySettingsView: View {
     ]
     
     var body: some View {
-        ZStack {
-            Color(UIColor.systemGroupedBackground).ignoresSafeArea()
-            
-            List {
-                Section {
-                    Toggle(isOn: $useAlternativeViews) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.blue).frame(width: 32, height: 32)
-                                Image(systemName: "photo.fill").font(.system(size: 16, weight: .semibold)).foregroundColor(.white)
-                            }
-                            Text("Sfondi personalizzati")
-                                .font(.system(.body, design: .rounded))
-                        }
-                    }
-                    .tint(.blue)
-                } footer: {
-                    Text("Attiva per cambiare lo sfondo delle tue sessioni di studio in corso.")
-                        .font(.system(.footnote, design: .rounded))
+        Form {
+            Section {
+                Toggle(isOn: $useAlternativeViews) {
+                    SettingsToggleLabel(title: "Sfondi personalizzati", icon: "photo.fill", color: .blue)
                 }
-                
-                if useAlternativeViews {
-                    Section(header: Text("I tuoi Sfondi").font(.system(.caption, design: .rounded).bold()),
-                            footer: Text("Ogni volta che ottieni una nuova Medaglia in Focus Mode, sbloccherai automaticamente un nuovo sfondo per le tue sessioni!").font(.system(.footnote, design: .rounded))) {
-                        
-                        // Sostituita la ScrollView orizzontale con una Griglia Verticale
-                        LazyVGrid(columns: columns, spacing: 16) {
-                            ForEach(AlternativeBackground.allBackgrounds) { bg in
-                                let isUnlocked = bg.requiredMedalId == nil || (manager.medals.first(where: { $0.id == bg.requiredMedalId })?.isUnlocked ?? false)
-                                
-                                Button(action: {
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    previewingBackground = bg
-                                }) {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Color.clear
-                                                                                        .aspectRatio(1170.0 / 2532.0, contentMode: .fit)
-                                                                                        .overlay(
-                                                                                            Group {
-                                                                                                if let img = bg.imageName, isUnlocked {
-                                                                                                    Image(img)
-                                                                                                        .resizable()
-                                                                                                        .scaledToFill()
-                                                                                                } else {
-                                                                                                    bg.color
-                                                                                                }
-                                                                                            }
-                                                                                        )
-                                                                                        .overlay(
-                                                                                            Group {
-                                                                                                if !isUnlocked {
-                                                                                                    ZStack {
-                                                                                                        Color.black.opacity(0.6)
-                                                                                                        Image(systemName: "lock.fill").font(.title3).foregroundColor(.white)
-                                                                                                    }
-                                                                                                }
-                                                                                            }
-                                                                                        )
-                                                                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                                                                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.primary.opacity(0.1), lineWidth: 1))
-                                                                                        .overlay(
-                                                                                            Group {
-                                                                                                if selectedBackgroundId == bg.id {
-                                                                                                    Image(systemName: "checkmark.circle.fill")
-                                                                                                        .font(.body).foregroundColor(.green).background(Circle().fill(.white)).padding(6)
-                                                                                                }
-                                                                                            }, alignment: .topTrailing
-                                                                                        )
-                                        
-                                        Text(bg.name)
-                                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                                            .foregroundColor(isUnlocked ? .primary : .secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!isUnlocked)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                    }
-                }
+                .tint(.blue)
+            } footer: {
+                Text("Attiva per cambiare lo sfondo delle tue sessioni di studio in corso.")
             }
-            .navigationTitle("Sfondi")
-            .navigationBarTitleDisplayMode(.inline)
-            
-            .fullScreenCover(item: $previewingBackground) { bg in
-                BackgroundPreviewCover(background: bg, selectedBackgroundId: $selectedBackgroundId)
+
+            if useAlternativeViews {
+                Section {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(AlternativeBackground.allBackgrounds) { background in
+                            backgroundButton(for: background)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                } header: {
+                    Text("I tuoi sfondi")
+                } footer: {
+                    Text("Ogni nuova medaglia ottenuta in Focus Mode sblocca automaticamente un nuovo sfondo per le sessioni.")
+                }
             }
         }
+        .navigationTitle("Sfondi")
+        .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $previewingBackground) { background in
+            BackgroundPreviewCover(background: background, selectedBackgroundId: $selectedBackgroundId)
+        }
+    }
+
+    private func backgroundButton(for background: AlternativeBackground) -> some View {
+        let isUnlocked = background.requiredMedalId == nil || (manager.medals.first(where: { $0.id == background.requiredMedalId })?.isUnlocked ?? false)
+
+        return Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            previewingBackground = background
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Color.clear
+                    .aspectRatio(1170.0 / 2532.0, contentMode: .fit)
+                    .overlay {
+                        if let imageName = background.imageName, isUnlocked {
+                            Image(imageName)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            background.color
+                        }
+                    }
+                    .overlay {
+                        if !isUnlocked {
+                            ZStack {
+                                Color.black.opacity(0.6)
+                                Image(systemName: "lock.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if selectedBackgroundId == background.id {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.body)
+                                .foregroundStyle(.green)
+                                .background(Circle().fill(.white))
+                                .padding(6)
+                        }
+                    }
+
+                Text(background.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isUnlocked ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isUnlocked)
     }
 }
 
