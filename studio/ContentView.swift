@@ -1749,7 +1749,8 @@ struct SummaryView: View {
             guard let day = cal.date(byAdding: .day, value: offset, to: weekStart) else { return 0 }
             return weekSessions.filter { cal.isDate($0.date, inSameDayAs: day) }.reduce(0) { $0 + $1.minutes }
         }
-
+//test
+        
         let delta = totalWeek - totalPrevWeek
         let percentChange: Double? = totalPrevWeek > 0 ? (Double(delta) / Double(totalPrevWeek)) * 100 : nil
         let isUp = delta >= 0
