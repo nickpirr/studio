@@ -70,6 +70,14 @@ final class WatchConnector: NSObject, ObservableObject, WCSessionDelegate {
             defaults?.set(name, forKey: WatchSync.keyCourseName)
         }
 
+        if let icon = context["courseIcon"] as? String {
+            defaults?.set(icon, forKey: WatchSync.keyCourseIcon)
+        }
+
+        if let colorName = context["courseColorName"] as? String {
+            defaults?.set(colorName, forKey: WatchSync.keyCourseColor)
+        }
+
         if let sid = context["sessionID"] as? String {
             sessionID = sid
             defaults?.set(sid, forKey: WatchSync.keySessionID)
@@ -159,6 +167,8 @@ final class WatchConnector: NSObject, ObservableObject, WCSessionDelegate {
 
         let defaults = WatchSync.defaults
         defaults?.set(course.name, forKey: WatchSync.keyCourseName)
+        defaults?.set(course.icon, forKey: WatchSync.keyCourseIcon)
+        defaults?.set(course.colorName, forKey: WatchSync.keyCourseColor)
         defaults?.set(true, forKey: WatchSync.keySessionActive)
         defaults?.set(newID, forKey: WatchSync.keySessionID)
         defaults?.set(now.timeIntervalSince1970, forKey: WatchSync.keyStartDate)
@@ -176,6 +186,8 @@ final class WatchConnector: NSObject, ObservableObject, WCSessionDelegate {
         sendToPhone([
             "action": "start",
             "courseName": course.name,
+            "courseIcon": course.icon,
+            "courseColorName": course.colorName,
             "sessionID": newID,
             "startDate": now.timeIntervalSince1970,
             "sessionActive": true,

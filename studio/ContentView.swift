@@ -38,346 +38,8 @@ extension View {
     }
 }
 
-struct CloudActiveSession: Equatable {
-    let sessionID: String
-    let courseName: String
-    let startDate: Date
-    let isPaused: Bool
-    let pausedSeconds: Int
-    let lastHeartbeatAt: Date
-    let deviceName: String
-
-    var isRecent: Bool {
-        Date().timeIntervalSince(lastHeartbeatAt) < 180
-    }
-}
-
-enum CloudAccountState: Equatable {
-    case checking
-    case available
-    case noAccount
-    case restricted
-    case couldNotDetermine
-    case unavailable(String)
-
-    var title: String {
-        switch self {
-        case .checking: return "Controllo account..."
-        case .available: return "iCloud collegato"
-        case .noAccount: return "Nessun account iCloud"
-        case .restricted: return "iCloud limitato"
-        case .couldNotDetermine: return "Stato iCloud non disponibile"
-        case .unavailable: return "iCloud non disponibile"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .checking:
-            return "Studio sta verificando l'account usato per la sincronizzazione."
-        case .available:
-            return "Le sessioni attive possono essere rilevate dagli altri dispositivi con lo stesso Apple ID."
-        case .noAccount:
-            return "Accedi a iCloud nelle Impostazioni di sistema per sincronizzare tra iPhone e iPad."
-        case .restricted:
-            return "Questo dispositivo non puo usare iCloud per restrizioni di sistema o account."
-        case .couldNotDetermine:
-            return "Non e stato possibile leggere lo stato dell'account iCloud."
-        case .unavailable(let message):
-            return message
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .available: return "checkmark.icloud.fill"
-        case .checking: return "icloud"
-        case .noAccount: return "person.crop.circle.badge.exclamationmark"
-        case .restricted: return "lock.icloud.fill"
-        case .couldNotDetermine, .unavailable: return "exclamationmark.icloud.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .available: return .green
-        case .checking: return .blue
-        case .noAccount, .restricted, .couldNotDetermine, .unavailable: return .orange
-        }
-    }
-}
-
-@MainActor
-final class CloudSessionSync: ObservableObject {
-    static let shared = CloudSessionSync()
-
-    @Published private(set) var accountState: CloudAccountState = .checking
-    @Published private(set) var accountIdentifier: String = "Account iCloud del dispositivo"
-
-    private let container = CKContainer.default()
-    private let recordID = CKRecord.ID(recordName: "currentActiveSession")
-    private let heartbeatMinimumInterval: TimeInterval = 30
-    private var lastPublishedAt: Date?
-
-    private var database: CKDatabase { container.privateCloudDatabase }
-
-    private init() {}
-
-    func refreshAccountStatus() async {
-        accountState = .checking
-        let result = await cloudAccountStatus()
-
-        switch result.status {
-        case .available:
-            accountState = .available
-            await refreshAccountIdentifier()
-        case .noAccount:
-            accountState = .noAccount
-        case .restricted:
-            accountState = .restricted
-        case .couldNotDetermine:
-            accountState = result.error.map { .unavailable($0.localizedDescription) } ?? .couldNotDetermine
-        case .temporarilyUnavailable:
-            accountState = .unavailable(result.error?.localizedDescription ?? "iCloud e temporaneamente non disponibile.")
-        @unknown default:
-            accountState = .couldNotDetermine
-        }
-    }
-
-    func publishActiveSession(
-        sessionID: String,
-        courseName: String,
-        startDate: Date,
-        isPaused: Bool,
-        pausedSeconds: Int,
-        force: Bool = false
-    ) async {
-        guard await isAccountAvailable() else { return }
-        if !force,
-           let lastPublishedAt,
-           Date().timeIntervalSince(lastPublishedAt) < heartbeatMinimumInterval {
-            return
-        }
-
-        do {
-            let record = try await fetchOrCreateActiveSessionRecord()
-            record["sessionID"] = sessionID as CKRecordValue
-            record["courseName"] = courseName as CKRecordValue
-            record["startDate"] = startDate as CKRecordValue
-            record["isPaused"] = (isPaused ? 1 : 0) as CKRecordValue
-            record["pausedSeconds"] = pausedSeconds as CKRecordValue
-            record["lastHeartbeatAt"] = Date() as CKRecordValue
-            record["deviceName"] = UIDevice.current.name as CKRecordValue
-            _ = try await database.save(record)
-            lastPublishedAt = Date()
-        } catch {
-            print("CloudKit active session save failed: \(error.localizedDescription)")
-        }
-    }
-
-    func clearActiveSession(sessionID: String?) async {
-        guard await isAccountAvailable() else { return }
-
-        do {
-            if let sessionID,
-               let existing = try? await database.record(for: recordID),
-               existing["sessionID"] as? String != sessionID {
-                return
-            }
-            _ = try await database.deleteRecord(withID: recordID)
-            lastPublishedAt = nil
-        } catch let error as CKError where error.code == .unknownItem {
-            lastPublishedAt = nil
-        } catch {
-            print("CloudKit active session delete failed: \(error.localizedDescription)")
-        }
-    }
-
-    func fetchActiveSession() async -> CloudActiveSession? {
-        guard await isAccountAvailable() else { return nil }
-
-        do {
-            let record = try await database.record(for: recordID)
-            guard let sessionID = record["sessionID"] as? String,
-                  let courseName = record["courseName"] as? String,
-                  let startDate = record["startDate"] as? Date,
-                  let pausedSeconds = record["pausedSeconds"] as? Int,
-                  let lastHeartbeatAt = record["lastHeartbeatAt"] as? Date
-            else { return nil }
-
-            let isPausedNumber = record["isPaused"] as? Int ?? 0
-            let deviceName = record["deviceName"] as? String ?? "altro dispositivo"
-
-            return CloudActiveSession(
-                sessionID: sessionID,
-                courseName: courseName,
-                startDate: startDate,
-                isPaused: isPausedNumber == 1,
-                pausedSeconds: pausedSeconds,
-                lastHeartbeatAt: lastHeartbeatAt,
-                deviceName: deviceName
-            )
-        } catch let error as CKError where error.code == .unknownItem {
-            return nil
-        } catch {
-            print("CloudKit active session fetch failed: \(error.localizedDescription)")
-            return nil
-        }
-    }
-
-    func syncCompletedSessions(local sessions: [CompletedSession]) async -> [CompletedSession] {
-        guard await isAccountAvailable() else { return sessions }
-
-        let remoteSessions = await fetchCompletedSessions()
-        var mergedByID = Dictionary(uniqueKeysWithValues: remoteSessions.map { ($0.id, $0) })
-        for session in sessions {
-            mergedByID[session.id] = session
-        }
-
-        let merged = mergedByID.values.sorted { $0.date > $1.date }
-        await uploadCompletedSessions(merged)
-        return merged
-    }
-
-    func uploadCompletedSessions(_ sessions: [CompletedSession]) async {
-        guard await isAccountAvailable() else { return }
-
-        for session in sessions {
-            do {
-                let record = try await fetchOrCreateCompletedSessionRecord(id: session.id)
-                write(session: session, to: record)
-                _ = try await database.save(record)
-            } catch {
-                print("CloudKit completed session save failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    func deleteCompletedSessions(ids: Set<UUID>) async {
-        guard !ids.isEmpty, await isAccountAvailable() else { return }
-
-        for id in ids {
-            do {
-                _ = try await database.deleteRecord(withID: completedSessionRecordID(for: id))
-            } catch let error as CKError where error.code == .unknownItem {
-                continue
-            } catch {
-                print("CloudKit completed session delete failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func fetchCompletedSessions() async -> [CompletedSession] {
-        let query = CKQuery(recordType: "CompletedSession", predicate: NSPredicate(value: true))
-        query.sortDescriptors = [NSSortDescriptor(key: "date", ascending: false)]
-
-        do {
-            let records = try await allRecords(matching: query)
-            return records.compactMap(completedSession(from:))
-        } catch {
-            print("CloudKit completed sessions fetch failed: \(error.localizedDescription)")
-            return []
-        }
-    }
-
-    private func allRecords(matching query: CKQuery) async throws -> [CKRecord] {
-        try await withCheckedThrowingContinuation { continuation in
-            database.perform(query, inZoneWith: nil) { records, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: records ?? [])
-                }
-            }
-        }
-    }
-
-    private func completedSessionRecordID(for id: UUID) -> CKRecord.ID {
-        CKRecord.ID(recordName: "completedSession_\(id.uuidString)")
-    }
-
-    private func fetchOrCreateCompletedSessionRecord(id: UUID) async throws -> CKRecord {
-        let recordID = completedSessionRecordID(for: id)
-        do {
-            return try await database.record(for: recordID)
-        } catch let error as CKError where error.code == .unknownItem {
-            return CKRecord(recordType: "CompletedSession", recordID: recordID)
-        }
-    }
-
-    private func write(session: CompletedSession, to record: CKRecord) {
-        record["sessionID"] = session.id.uuidString as CKRecordValue
-        record["courseIcon"] = session.courseIcon as CKRecordValue
-        record["courseName"] = session.courseName as CKRecordValue
-        record["courseColorName"] = session.courseColorName as CKRecordValue
-        record["minutes"] = session.minutes as CKRecordValue
-        record["date"] = session.date as CKRecordValue
-        record["topic"] = session.topic as CKRecordValue
-        record["comment"] = session.comment as CKRecordValue
-        record["effort"] = session.effort as CKRecordValue
-        record["concentration"] = session.concentration as CKRecordValue
-        record["satisfaction"] = session.satisfaction as CKRecordValue
-        record["wasFocusModeActive"] = ((session.wasFocusModeActive ?? false) ? 1 : 0) as CKRecordValue
-        record["updatedAt"] = Date() as CKRecordValue
-    }
-
-    private func completedSession(from record: CKRecord) -> CompletedSession? {
-        guard let idString = record["sessionID"] as? String,
-              let id = UUID(uuidString: idString),
-              let courseIcon = record["courseIcon"] as? String,
-              let courseName = record["courseName"] as? String,
-              let courseColorName = record["courseColorName"] as? String,
-              let minutes = record["minutes"] as? Int,
-              let date = record["date"] as? Date
-        else { return nil }
-
-        return CompletedSession(
-            id: id,
-            courseIcon: courseIcon,
-            courseName: courseName,
-            courseColor: Presets.color(from: courseColorName),
-            minutes: minutes,
-            date: date,
-            topic: record["topic"] as? String ?? "",
-            comment: record["comment"] as? String ?? "",
-            effort: record["effort"] as? Int ?? 5,
-            concentration: record["concentration"] as? Int ?? 5,
-            satisfaction: record["satisfaction"] as? Int ?? 5,
-            wasFocusModeActive: (record["wasFocusModeActive"] as? Int ?? 0) == 1
-        )
-    }
-
-    private func isAccountAvailable() async -> Bool {
-        if accountState == .available { return true }
-        await refreshAccountStatus()
-        return accountState == .available
-    }
-
-    private func fetchOrCreateActiveSessionRecord() async throws -> CKRecord {
-        do {
-            return try await database.record(for: recordID)
-        } catch let error as CKError where error.code == .unknownItem {
-            return CKRecord(recordType: "ActiveSession", recordID: recordID)
-        }
-    }
-
-    private func refreshAccountIdentifier() async {
-        do {
-            let userRecordID = try await container.userRecordID()
-            accountIdentifier = "iCloud \(userRecordID.recordName.prefix(8))"
-        } catch {
-            accountIdentifier = "Account iCloud collegato"
-        }
-    }
-
-    private func cloudAccountStatus() async -> (status: CKAccountStatus, error: Error?) {
-        await withCheckedContinuation { continuation in
-            container.accountStatus { status, error in
-                continuation.resume(returning: (status, error))
-            }
-        }
-    }
-}
+// La sincronizzazione CloudKit vive in CloudSync.swift (CloudSessionSync, CloudActiveSession, CloudAccountState).
+// Le sessioni di gruppo con codice invito vivono in GroupStudySession.swift.
 
 // MARK: - PRESET PER ICONE E COLORI
 
@@ -540,9 +202,9 @@ class StudyManager: NSObject, ObservableObject {
     func saveCourses()  { save(courses,           key: "savedCourses") }
     func saveSessions() { save(completedSessions, key: "savedSessions") }
 
-    func syncCompletedSessionsFromCloud() {
+    func syncCompletedSessionsFromCloud(force: Bool = false) {
         Task { @MainActor in
-            let merged = await CloudSessionSync.shared.syncCompletedSessions(local: completedSessions)
+            guard let merged = await CloudSessionSync.shared.syncCompletedSessions(local: completedSessions, force: force) else { return }
             applyCloudMergedSessions(merged)
         }
     }
@@ -565,9 +227,8 @@ class StudyManager: NSObject, ObservableObject {
 
         let deletedIDs = knownCompletedSessionIDs.subtracting(currentIDs)
         let snapshot = completedSessions
-        Task {
-            await CloudSessionSync.shared.uploadCompletedSessions(snapshot)
-            await CloudSessionSync.shared.deleteCompletedSessions(ids: deletedIDs)
+        Task { @MainActor in
+            await CloudSessionSync.shared.pushLocalChanges(sessions: snapshot, deletedIDs: deletedIDs)
         }
     }
 
@@ -888,19 +549,26 @@ func pushFullStateToWatch() {
     let isPaused      = defaults?.bool(forKey: WatchSync.keyIsPaused) ?? false
     let pausedSeconds = defaults?.integer(forKey: WatchSync.keyPausedSeconds) ?? 0
 
+    // Icona e colore della materia attiva: servono alle complicazioni del Watch.
+    let activeCourse = courses.first(where: { $0.name == courseName })
+    let courseIcon = activeCourse?.icon ?? "book.fill"
+    let courseColorName = activeCourse?.colorName ?? "blue"
+
     let context: [String: Any] = [
         "courses": coursesData,
         "weeklyMinutes": weeklyMinutes,
         "sessionActive": sessionActive,
         "courseName": courseName,
+        "courseIcon": courseIcon,
+        "courseColorName": courseColorName,
         "sessionID": sessionID,
         "startDate": startDate,
         "isPaused": isPaused,
         "pausedSeconds": pausedSeconds
     ]
-    
+
     try? WCSession.default.updateApplicationContext(context)
-    WidgetCenter.shared.reloadAllTimelines() 
+    WidgetCenter.shared.reloadAllTimelines()
 }
 extension Notification.Name {
     static let startSessionFromWatch = Notification.Name("startSessionFromWatch")
@@ -917,9 +585,12 @@ struct ContentView: View {
     // ECCO LE VARIABILI CHE ERANO SPARITE!
     @StateObject var manager = StudyManager()
     @StateObject private var cloudSessionSync = CloudSessionSync.shared
+    @StateObject private var groupController = GroupSessionController.shared
     @State private var selectedCourse: StudyCourse?
+    @State private var activeGroupCourse: StudyCourse?
     @State private var pendingSession: PendingSession?
     @State private var selectedTab = 0
+    @State private var showingGroupSheet = false
     @Environment(\.scenePhase) private var scenePhase
     
     var body: some View {
@@ -928,9 +599,13 @@ struct ContentView: View {
                 .tabItem { Label("Riepilogo", systemImage: "chart.pie.fill") }
                 .tag(0)
 
-            LibraryView(manager: manager, selectedCourse: $selectedCourse)
-                .tabItem { Label("Studia", systemImage: "book.fill") }
-                .tag(1)
+            LibraryView(
+                manager: manager,
+                selectedCourse: $selectedCourse,
+                onOpenGroupStudy: { showingGroupSheet = true }
+            )
+            .tabItem { Label("Studia", systemImage: "book.fill") }
+            .tag(1)
 
             SessionsView(manager: manager)
                 .tabItem { Label("Sessioni", systemImage: "clock.fill") }
@@ -942,11 +617,45 @@ struct ContentView: View {
         }
         .tint(.blue)
         .fullScreenCover(item: $selectedCourse) { course in
-            ActiveWorkoutView(course: course) { minutes in
-                selectedCourse = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    pendingSession = PendingSession(course: course, minutes: minutes)
+            ActiveWorkoutView(
+                course: course,
+                onEnd: { minutes in
+                    selectedCourse = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        pendingSession = PendingSession(course: course, minutes: minutes)
+                    }
+                },
+                onTransferredAway: {
+                    selectedCourse = nil
                 }
+            )
+        }
+        .fullScreenCover(item: $activeGroupCourse) { course in
+            ActiveWorkoutView(
+                course: course,
+                onEnd: { minutes in
+                    activeGroupCourse = nil
+                    groupController.clearRoomLocally()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        pendingSession = PendingSession(course: course, minutes: minutes)
+                    }
+                },
+                group: groupController
+            )
+        }
+        .sheet(isPresented: $showingGroupSheet) {
+            GroupStudySheet(manager: manager, controller: groupController)
+        }
+        .onReceive(groupController.$room) { room in
+            // Quando la stanza passa a "running", apri la sessione per tutti i partecipanti.
+            guard let room, room.phase == .running, activeGroupCourse == nil else { return }
+            showingGroupSheet = false
+
+            let course = manager.courses.first(where: { $0.name == room.courseName })
+                ?? StudyCourse(name: room.courseName, icon: room.courseIcon, colorName: room.courseColorName)
+            selectedCourse = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                activeGroupCourse = course
             }
         }
         .fullScreenCover(item: $pendingSession) { pending in
@@ -975,16 +684,16 @@ struct ContentView: View {
                         completePendingSessionIfNeeded()
                         return
                     }
-                    
+
                     guard url.scheme == "studio",
                           url.host == "start",
                           let name = url.pathComponents.dropFirst().first?.removingPercentEncoding,
                           let course = manager.courses.first(where: { $0.name == name })
                     else { return }
-                    
+
                     let defaults = AppConstants.sharedDefaults
                     let isSessionActive = defaults.bool(forKey: "sharedSessionActive")
-                    
+
                     selectedTab = 1
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         if isSessionActive {
@@ -997,7 +706,7 @@ struct ContentView: View {
                 .onAppear {
                     checkPendingShortcut()
                     attemptToResumeSession()
-                    detectCloudActiveSession()
+                    refreshRemoteSessionBanner()
                     manager.syncCompletedSessionsFromCloud()
                     completePendingSessionIfNeeded()
                     manager.activateWatchConnectivity()
@@ -1005,7 +714,7 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     checkPendingShortcut()
                     attemptToResumeSession()
-                    detectCloudActiveSession()
+                    refreshRemoteSessionBanner()
                     manager.syncCompletedSessionsFromCloud()
                     completePendingSessionIfNeeded()
                 }
@@ -1015,17 +724,85 @@ struct ContentView: View {
                     else { return }
                     selectedCourse = course
                 }
+                .onReceive(Timer.publish(every: 25, on: .main, in: .common).autoconnect()) { _ in
+                    // Polling leggero: rileva sessioni avviate su altri dispositivi mentre l'app è aperta.
+                    guard scenePhase == .active else { return }
+                    refreshRemoteSessionBanner()
+                }
                 .onChange(of: scenePhase) { _, newPhase in
                     UserDefaults(suiteName: "group.studioso")?.set(newPhase == .active, forKey: "appIsForeground")
                     if newPhase == .active {
                         checkPendingShortcut()
                         attemptToResumeSession()
-                        detectCloudActiveSession()
+                        refreshRemoteSessionBanner()
                         completePendingSessionIfNeeded()
                     }
                 }
+                .sheet(item: remoteSessionBinding) { session in
+                    RemoteSessionTransferSheet(
+                        session: session,
+                        course: manager.courses.first(where: { $0.name == session.courseName }),
+                        onTransfer: { transferRemoteSession(session) },
+                        onIgnore: { cloudSessionSync.ignoreRemoteActiveSession() }
+                    )
+                    .presentationDetents([.height(380)])
+                    .presentationCornerRadius(34)
+                }
             }
-                
+
+            // MARK: - SESSIONE SU UN ALTRO DISPOSITIVO
+
+            /// Binding per lo sheet di trasferimento: mostra la sessione remota solo
+            /// se su questo dispositivo non ce n'è già una in corso.
+            private var remoteSessionBinding: Binding<CloudActiveSession?> {
+                Binding(
+                    get: {
+                        guard selectedCourse == nil,
+                              !AppConstants.sharedDefaults.bool(forKey: "sharedSessionActive")
+                        else { return nil }
+                        return cloudSessionSync.remoteActiveSession
+                    },
+                    set: { newValue in
+                        if newValue == nil { cloudSessionSync.ignoreRemoteActiveSession() }
+                    }
+                )
+            }
+
+            private func refreshRemoteSessionBanner() {
+                guard !AppConstants.sharedDefaults.bool(forKey: "sharedSessionActive") else { return }
+                Task { @MainActor in
+                    await cloudSessionSync.refreshRemoteActiveSession()
+                }
+            }
+
+            /// Prende possesso della sessione in corso su un altro dispositivo e la continua qui.
+            private func transferRemoteSession(_ session: CloudActiveSession) {
+                Task { @MainActor in
+                    guard let latest = await cloudSessionSync.takeoverActiveSession(session) else {
+                        cloudSessionSync.ignoreRemoteActiveSession()
+                        return
+                    }
+
+                    let defaults = AppConstants.sharedDefaults
+                    defaults.set(latest.isPaused, forKey: "sharedIsPaused")
+                    defaults.set(latest.pausedSeconds, forKey: "sharedPausedSeconds")
+                    defaults.set(latest.startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+                    defaults.set(false, forKey: "sharedStopRequested")
+                    defaults.set("", forKey: "sharedStopSessionID")
+                    defaults.set(latest.courseName, forKey: "sharedCourseName")
+                    defaults.set(latest.sessionID, forKey: "sharedSessionID")
+                    defaults.set(true, forKey: "sharedSessionActive")
+                    defaults.synchronize()
+
+                    let course = manager.courses.first(where: { $0.name == latest.courseName })
+                        ?? StudyCourse(name: latest.courseName, icon: "book.fill", color: .blue)
+
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    selectedTab = 1
+                    selectedCourse = course
+                }
+            }
+
             private func attemptToResumeSession() {
                 let defaults = AppConstants.sharedDefaults
                 if defaults.bool(forKey: "sharedSessionActive") {
@@ -1033,31 +810,6 @@ struct ContentView: View {
                     if let course = manager.courses.first(where: { $0.name == courseName }) {
                         selectedCourse = course
                     }
-                }
-            }
-
-            private func detectCloudActiveSession() {
-                let defaults = AppConstants.sharedDefaults
-                guard !defaults.bool(forKey: "sharedSessionActive") else { return }
-
-                Task { @MainActor in
-                    guard let cloudSession = await cloudSessionSync.fetchActiveSession(),
-                          cloudSession.isRecent,
-                          let course = manager.courses.first(where: { $0.name == cloudSession.courseName })
-                    else { return }
-
-                    defaults.set(cloudSession.isPaused, forKey: "sharedIsPaused")
-                    defaults.set(cloudSession.pausedSeconds, forKey: "sharedPausedSeconds")
-                    defaults.set(cloudSession.startDate.timeIntervalSince1970, forKey: "sharedStartDate")
-                    defaults.set(false, forKey: "sharedStopRequested")
-                    defaults.set("", forKey: "sharedStopSessionID")
-                    defaults.set(cloudSession.courseName, forKey: "sharedCourseName")
-                    defaults.set(cloudSession.sessionID, forKey: "sharedSessionID")
-                    defaults.set(true, forKey: "sharedSessionActive")
-                    defaults.synchronize()
-
-                    selectedTab = 1
-                    selectedCourse = course
                 }
             }
 
@@ -1094,6 +846,101 @@ struct ContentView: View {
                 }
             }
         }
+// MARK: - SHEET TRASFERIMENTO SESSIONE DA ALTRO DISPOSITIVO
+struct RemoteSessionTransferSheet: View {
+    let session: CloudActiveSession
+    let course: StudyCourse?
+    var onTransfer: () -> Void
+    var onIgnore: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var accentColor: Color { course?.color ?? .blue }
+    private var icon: String { course?.icon ?? "book.fill" }
+
+    private func formatElapsed(_ seconds: Int) -> String {
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Circle()
+                    .fill(accentColor.gradient)
+                    .frame(width: 74, height: 74)
+                Image(systemName: icon)
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.top, 34)
+            .padding(.bottom, 18)
+
+            Text("Sessione in corso")
+                .font(.title3.bold())
+            Text("Stai studiando **\(session.courseName)** su “\(session.deviceName)”.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.top, 2)
+
+            // Timer live della sessione remota
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                HStack(spacing: 8) {
+                    if session.isPaused {
+                        Image(systemName: "pause.fill")
+                            .font(.footnote.bold())
+                            .foregroundStyle(.orange)
+                        Text(formatElapsed(session.pausedSeconds))
+                            .font(.system(size: 34, weight: .bold, design: .rounded).monospacedDigit())
+                    } else {
+                        Text(formatElapsed(session.elapsedSeconds))
+                            .font(.system(size: 34, weight: .bold, design: .rounded).monospacedDigit())
+                            .contentTransition(.numericText())
+                    }
+                }
+            }
+            .padding(.vertical, 14)
+
+            Spacer(minLength: 0)
+
+            VStack(spacing: 10) {
+                Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    dismiss()
+                    onTransfer()
+                } label: {
+                    Label("Continua su questo dispositivo", systemImage: "arrow.down.forward.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(accentColor)
+
+                Button {
+                    dismiss()
+                    onIgnore()
+                } label: {
+                    Text("Ignora")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .tint(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 22)
+        }
+    }
+}
+
 struct StudyMedal: Identifiable, Codable {
     var id: String
     var title: String
@@ -1537,28 +1384,151 @@ struct SummaryView: View {
     @State private var period = "G"
     let periods = ["G", "S", "M", "A"]
 
+    /// Data di riferimento del periodo visualizzato: navigabile nel passato
+    /// con frecce e swipe, per vedere ogni singolo giorno/settimana/mese/anno.
+    @State private var referenceDate = Date()
+
     @State private var showingSettings = false
     @State private var showingStudyDetail = false
     @State private var showingGradesDetail = false
     @State private var showingGoalsDetail = false
 
+    // MARK: - PERIODO SELEZIONATO (navigabile)
+
+    private var periodCalendar: Calendar {
+        var cal = Calendar.current
+        cal.firstWeekday = 2 // settimane da lunedì
+        return cal
+    }
+
+    /// Intervallo [inizio, fine) del periodo attualmente visualizzato.
+    var periodInterval: DateInterval {
+        let cal = periodCalendar
+        let component: Calendar.Component = {
+            switch period {
+            case "G": return .day
+            case "S": return .weekOfYear
+            case "M": return .month
+            default:  return .year
+            }
+        }()
+        return cal.dateInterval(of: component, for: referenceDate)
+            ?? DateInterval(start: referenceDate, duration: 86400)
+    }
+
+    var isViewingCurrentPeriod: Bool {
+        periodInterval.contains(Date())
+    }
+
+    /// Titolo leggibile del periodo (es. "mar 15 lug", "14–20 lug", "luglio 2026").
+    var periodTitle: String {
+        let cal = periodCalendar
+        let interval = periodInterval
+        switch period {
+        case "G":
+            if cal.isDateInToday(referenceDate) { return "Oggi" }
+            if cal.isDateInYesterday(referenceDate) { return "Ieri" }
+            return referenceDate.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        case "S":
+            if isViewingCurrentPeriod { return "Questa settimana" }
+            let endDay = interval.end.addingTimeInterval(-1)
+            let sameMonth = cal.isDate(interval.start, equalTo: endDay, toGranularity: .month)
+            let startText = sameMonth
+                ? interval.start.formatted(.dateTime.day())
+                : interval.start.formatted(.dateTime.day().month(.abbreviated))
+            return "\(startText) – \(endDay.formatted(.dateTime.day().month(.abbreviated)))"
+        case "M":
+            if isViewingCurrentPeriod { return "Questo mese" }
+            return referenceDate.formatted(.dateTime.month(.wide).year()).capitalized
+        case "A":
+            if isViewingCurrentPeriod { return "Quest'anno" }
+            return referenceDate.formatted(.dateTime.year())
+        default: return ""
+        }
+    }
+
+    var canGoForward: Bool { !isViewingCurrentPeriod }
+
+    /// Sposta il periodo visualizzato avanti/indietro di un'unità (giorno/settimana/mese/anno).
+    private func stepPeriod(_ direction: Int) {
+        if direction > 0 && !canGoForward { return }
+        let cal = periodCalendar
+        let component: Calendar.Component = {
+            switch period {
+            case "G": return .day
+            case "S": return .weekOfYear
+            case "M": return .month
+            default:  return .year
+            }
+        }()
+        guard let newDate = cal.date(byAdding: component, value: direction, to: referenceDate) else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(.snappy) { referenceDate = min(newDate, Date()) }
+    }
+
+    /// Header di navigazione del periodo: frecce, titolo, ritorno a oggi.
+    private var periodNavigationHeader: some View {
+        HStack(spacing: 12) {
+            Button { stepPeriod(-1) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color(.tertiarySystemFill)))
+            }
+            .buttonStyle(.plain)
+
+            VStack(spacing: 2) {
+                Text(periodTitle)
+                    .font(.system(.body, design: .rounded).weight(.bold))
+                    .contentTransition(.opacity)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if !isViewingCurrentPeriod {
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        withAnimation(.snappy) { referenceDate = Date() }
+                    } label: {
+                        Text("Torna a oggi")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.blue)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .animation(.snappy, value: isViewingCurrentPeriod)
+
+            Button { stepPeriod(1) } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color(.tertiarySystemFill)))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canGoForward)
+            .opacity(canGoForward ? 1 : 0.35)
+        }
+        .padding(.bottom, 14)
+    }
+
+    /// Swipe orizzontale sul grafico per cambiare periodo.
+    private var periodSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 25)
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                if value.translation.width > 40 { stepPeriod(-1) }
+                else if value.translation.width < -40 { stepPeriod(1) }
+            }
+    }
+
     // MARK: - DATI GRAFICO PRINCIPALE (riusato nello sheet espanso "Materie")
     var chartData: [CompletedSession] {
         let cal = Calendar.current
-        let now = Date()
-        let filtered: [CompletedSession]
-        switch period {
-        case "G": filtered = manager.completedSessions.filter { cal.isDateInToday($0.date) }
-        case "S":
-            guard let s = cal.dateInterval(of: .weekOfYear, for: now)?.start else { return [] }
-            filtered = manager.completedSessions.filter { $0.date >= s }
-        case "M":
-            guard let s = cal.dateInterval(of: .month, for: now)?.start else { return [] }
-            filtered = manager.completedSessions.filter { $0.date >= s }
-        case "A":
-            guard let s = cal.dateInterval(of: .year, for: now)?.start else { return [] }
-            filtered = manager.completedSessions.filter { $0.date >= s }
-        default: filtered = []
+        let interval = periodInterval
+        let filtered = manager.completedSessions.filter {
+            $0.date >= interval.start && $0.date < interval.end
         }
 
         func bucket(for date: Date) -> Date {
@@ -1603,7 +1573,7 @@ struct SummaryView: View {
 
     var statTitle: String {
         switch period {
-        case "G": return "Oggi"
+        case "G": return isViewingCurrentPeriod ? "Oggi" : "Totale del giorno"
         case "A": return "Media mensile"
         default:  return "Media giornaliera"
         }
@@ -1614,31 +1584,19 @@ struct SummaryView: View {
         switch period {
         case "G": return total
         case "S": return total / 7
-        case "M": return total / (Calendar.current.range(of: .day, in: .month, for: Date())?.count ?? 30)
+        case "M": return total / (periodCalendar.range(of: .day, in: .month, for: referenceDate)?.count ?? 30)
         case "A": return total / 12
         default:  return 0
         }
     }
 
+    var periodTotalMinutes: Int {
+        chartData.reduce(0) { $0 + $1.minutes }
+    }
+
     var xDomain: ClosedRange<Date> {
-        let cal = Calendar.current
-        let now = Date()
-        switch period {
-        case "G":
-            let s = cal.startOfDay(for: now)
-            return s...cal.date(byAdding: .hour, value: 24, to: s)!
-        case "S":
-            let s = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now))!
-            return s...cal.date(byAdding: .day, value: 7, to: s)!
-        case "M":
-            let s = cal.date(from: cal.dateComponents([.year, .month], from: now))!
-            let cnt = cal.range(of: .day, in: .month, for: now)!.count
-            return s...cal.date(byAdding: .day, value: cnt, to: s)!
-        case "A":
-            let s = cal.date(from: cal.dateComponents([.year], from: now))!
-            return s...cal.date(byAdding: .month, value: 12, to: s)!
-        default: return now...now
-        }
+        let interval = periodInterval
+        return interval.start...interval.end
     }
 
     func formatTimeText(_ minutes: Int) -> String {
@@ -1648,20 +1606,9 @@ struct SummaryView: View {
 
     // MARK: - DATI VOTI (per periodo, riusato nello sheet espanso "Voti")
     var gradesData: [CompletedSession] {
-        let cal = Calendar.current
-        let now = Date()
-        switch period {
-        case "G": return manager.completedSessions.filter { cal.isDateInToday($0.date) }
-        case "S":
-            guard let s = cal.dateInterval(of: .weekOfYear, for: now)?.start else { return [] }
-            return manager.completedSessions.filter { $0.date >= s }
-        case "M":
-            guard let s = cal.dateInterval(of: .month, for: now)?.start else { return [] }
-            return manager.completedSessions.filter { $0.date >= s }
-        case "A":
-            guard let s = cal.dateInterval(of: .year, for: now)?.start else { return [] }
-            return manager.completedSessions.filter { $0.date >= s }
-        default: return []
+        let interval = periodInterval
+        return manager.completedSessions.filter {
+            $0.date >= interval.start && $0.date < interval.end
         }
     }
 
@@ -1757,6 +1704,7 @@ struct SummaryView: View {
 
         return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            referenceDate = Date()
             showingStudyDetail = true
         } label: {
             VStack(alignment: .leading, spacing: 10) {
@@ -1849,6 +1797,7 @@ struct SummaryView: View {
 
         return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            referenceDate = Date()
             showingGradesDetail = true
         } label: {
             VStack(alignment: .leading, spacing: 10) {
@@ -2124,12 +2073,29 @@ struct SummaryView: View {
                         ForEach(periods, id: \.self) { Text($0) }
                     }
                     .pickerStyle(.segmented)
-                    .padding(.bottom, 15)
+                    .padding(.bottom, 12)
 
-                    Text(statTitle).font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
-                    Text(formatTimeText(statValue))
-                        .font(.system(size: 32, design: .rounded).weight(.bold))
-                        .padding(.bottom, 20)
+                    periodNavigationHeader
+
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(statTitle).font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
+                            Text(formatTimeText(statValue))
+                                .font(.system(size: 32, design: .rounded).weight(.bold))
+                                .contentTransition(.numericText())
+                        }
+                        Spacer()
+                        if period != "G" {
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("Totale").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
+                                Text(formatTimeText(periodTotalMinutes))
+                                    .font(.system(size: 20, design: .rounded).weight(.bold))
+                                    .foregroundStyle(.secondary)
+                                    .contentTransition(.numericText())
+                            }
+                        }
+                    }
+                    .padding(.bottom, 20)
 
                     Chart {
                         ForEach(chartData) { session in
@@ -2166,6 +2132,17 @@ struct SummaryView: View {
                         }
                     }
                     .frame(height: 200)
+                    .contentShape(Rectangle())
+                    .gesture(periodSwipeGesture)
+                    .animation(.snappy, value: referenceDate)
+
+                    if chartData.isEmpty {
+                        Text("Nessuna sessione in questo periodo.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 8)
+                    }
 
                     let periodTotals = Dictionary(grouping: chartData, by: { $0.courseName })
                         .mapValues { $0.reduce(0) { $0 + $1.minutes } }
@@ -2229,11 +2206,14 @@ struct SummaryView: View {
                         ForEach(periods, id: \.self) { Text($0) }
                     }
                     .pickerStyle(.segmented)
-                    .padding(.bottom, 15)
+                    .padding(.bottom, 12)
+
+                    periodNavigationHeader
 
                     Text("Voto medio generale").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
                     Text(sessions.isEmpty ? "—" : String(format: "%.1f / 10", avgOverall))
                         .font(.system(size: 32, design: .rounded).weight(.bold))
+                        .contentTransition(.numericText())
                         .padding(.bottom, 20)
 
                     if sessions.isEmpty {
@@ -2241,6 +2221,8 @@ struct SummaryView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 40)
+                            .contentShape(Rectangle())
+                            .gesture(periodSwipeGesture)
                     } else {
                         Chart {
                             ForEach(Array(sessions.enumerated()), id: \.offset) { index, session in
@@ -2266,6 +2248,9 @@ struct SummaryView: View {
                             AxisMarks(position: .trailing, values: [0, 2, 4, 6, 8, 10])
                         }
                         .frame(height: 200)
+                        .contentShape(Rectangle())
+                        .gesture(periodSwipeGesture)
+                        .animation(.snappy, value: referenceDate)
 
                         HStack(spacing: 12) {
                             gradeStatBox(title: "Impegno", value: avgEffort, color: .orange)
@@ -2390,6 +2375,7 @@ struct SummaryView: View {
 struct LibraryView: View {
     @ObservedObject var manager: StudyManager
     @Binding var selectedCourse: StudyCourse?
+    var onOpenGroupStudy: (() -> Void)? = nil
     @State private var showingAddCourse = false
     @State private var editingCourse: StudyCourse?
     @State private var newCourseName = ""
@@ -2435,6 +2421,16 @@ struct LibraryView: View {
             }
             .listStyle(.plain)
             .navigationTitle("Studia")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        onOpenGroupStudy?()
+                    } label: {
+                        Image(systemName: "person.2.fill")
+                    }
+                }
+            }
             .sheet(item: $editingCourse) { course in
                 EditCourseSheet(course: course, manager: manager)
             }
@@ -2713,6 +2709,11 @@ struct AddCourseSheet: View {
 struct ActiveWorkoutView: View {
     let course: StudyCourse
     var onEnd: (Int) -> Void
+    /// Chiamata quando un altro dispositivo prende possesso della sessione:
+    /// la vista si chiude senza salvare nulla (la sessione continua altrove).
+    var onTransferredAway: (() -> Void)? = nil
+    /// Se presente, la sessione è condivisa con amici: pausa/ripresa/fine sincronizzate.
+    var group: GroupSessionController? = nil
 
     @AppStorage("useAlternativeViews") private var useAlternativeViews = false
     @AppStorage("selectedBackgroundId") private var selectedBackgroundId = "noir"
@@ -2734,7 +2735,6 @@ struct ActiveWorkoutView: View {
     @State private var targetHeight: CGFloat = 86
     @State private var dragTranslation: CGFloat = 0
     @State private var isExpanded: Bool = false
-    @State private var safeAreaBottom: CGFloat = 34
     @Namespace private var liveActivityGlassNamespace
 
     var currentHeight: CGFloat {
@@ -2749,17 +2749,19 @@ struct ActiveWorkoutView: View {
     }
 
     private var cardHorizontalPadding: CGFloat { 28 - 16 * expansionProgress }
-    private let screenCornerRadius: CGFloat = 71
-    private var concentricCornerRadius: CGFloat { max(24, screenCornerRadius - cardHorizontalPadding) }
+    private let expandedCardCornerRadius: CGFloat = 59
     private var compactPillCornerRadius: CGFloat { compactHeight / 2 }
     private var cardCornerRadius: CGFloat {
-        compactPillCornerRadius + (concentricCornerRadius - compactPillCornerRadius) * expansionProgress
+        compactPillCornerRadius + (expandedCardCornerRadius - compactPillCornerRadius) * expansionProgress
     }
-    private var cardBottomPadding: CGFloat { cardHorizontalPadding - safeAreaBottom - 33 }
+    private var cardBottomPadding: CGFloat { cardHorizontalPadding }
+    private var liveActivityBarShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+    }
     private var liveActivityGrabberHeight: CGFloat { 26 * expansionProgress }
     private var headerHorizontalPadding: CGFloat { max(16, cardCornerRadius - 27) }
     private var headerTopPadding: CGFloat { max(0, cardCornerRadius - 27 - liveActivityGrabberHeight) }
-    private var endSliderInset: CGFloat { max(16, cardCornerRadius - 41) }
+    private var endSliderInset: CGFloat { max(16, cardHorizontalPadding) }
     private var courseIconCollapseProgress: CGFloat { min(1, expansionProgress * 3.2) }
 
     // MARK: - TIMER
@@ -2769,6 +2771,7 @@ struct ActiveWorkoutView: View {
     @State private var secondsElapsed = 0
     @State private var isPaused = false
     @State private var hasStartedThisView = false
+    @State private var isReleasedAfterTransfer = false
 
     // MARK: - PAUSA TIMER
     @State private var pauseEndDate: Date? = nil
@@ -2777,6 +2780,7 @@ struct ActiveWorkoutView: View {
     @State private var activePauseMinutes: Int? = nil
     @State private var timeWithoutInteraction = 0
     @State private var isScreensaverActive = false
+    @State private var groupPollCounter = 0
 
     @Environment(\.scenePhase) var scenePhase
     private let fluidSpring = Animation.interpolatingSpring(stiffness: 300, damping: 25)
@@ -2788,12 +2792,6 @@ struct ActiveWorkoutView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { safeAreaBottom = geo.safeAreaInsets.bottom }
-            }
-            .ignoresSafeArea()
 
             // MARK: SFONDO
             Group {
@@ -2825,13 +2823,8 @@ struct ActiveWorkoutView: View {
                     // Timer + icona nella STESSA posizione del timer nella card compatta.
                     //
                     // Derivazione geometrica:
-                    //   Nel main ZStack (bottom = safeArea = 34pt dal bordo fisico):
-                    //     cardBottomPadding = 28 - safeAreaBottom - 33 → card bottom = safeArea + |padding|
-                    //     = 34 + (safeAreaBottom + 33 - 28) = 34 + safeAreaBottom + 5 - safeAreaBottom = 34 + 5
-                    //     Indipendente dalla safeArea → card bottom è sempre 5pt SOTTO il bordo fisico.
-                    //   Nello screensaver ZStack (ignoresSafeArea, bottom = bordo fisico = 0pt extra):
-                    //     Per replicare "card bottom 5pt sotto bordo fisico" → padding(.bottom, -5).
-                    //
+                    //   La barra compatta usa lo stesso inset sul lato e sul fondo fisico.
+                    //   Lo screensaver ignora la safe area, quindi basta riusare cardHorizontalPadding.
                     //   padding(.horizontal, 28)  = cardHorizontalPadding in compact
                     //   padding(.horizontal, 18) interno = stesso inner padding dell'HStack del card
                     //   frame(height: compactHeight, alignment: .center) = stessa altezza card compatta
@@ -2854,7 +2847,7 @@ struct ActiveWorkoutView: View {
                     .padding(.horizontal, 18)
                     .frame(height: compactHeight, alignment: .center)
                     .padding(.horizontal, 28)
-                    .padding(.bottom, 10) // allineato alla barra compatta
+                    .padding(.bottom, cardHorizontalPadding) // allineato alla barra compatta
                 }
                 .ignoresSafeArea()
                 .zIndex(100)
@@ -2886,7 +2879,13 @@ struct ActiveWorkoutView: View {
                 .perform(NSSelectorFromString("setIdleTimerDisabled:"), with: NSNumber(value: false))
         }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active { syncWithLiveActivityBackgroundChanges() }
+            if newPhase == .active {
+                syncWithLiveActivityBackgroundChanges()
+                // Controllo immediato di ownership: se un altro dispositivo ha preso
+                // la sessione mentre eravamo in background, rilascia subito.
+                publishCloudActiveSession(force: true)
+                if let group { Task { await group.refresh() } }
+            }
             else if newPhase == .background {
                 if isFocusModeEnabled && !isPaused {
                     isPaused = true; pausedSeconds = secondsElapsed
@@ -2896,10 +2895,17 @@ struct ActiveWorkoutView: View {
             }
         }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            guard !isReleasedAfterTransfer else { return }
             if isFocusModeEnabled {
                 timeWithoutInteraction += 1
                 if timeWithoutInteraction >= 180 && !isScreensaverActive {
                     withAnimation(.easeInOut(duration: 1.5)) { isScreensaverActive = true }
+                }
+            }
+            if let group {
+                groupPollCounter += 1
+                if groupPollCounter % 4 == 0 {
+                    Task { await group.refresh() }
                 }
             }
             if let endDate = pauseEndDate {
@@ -2912,6 +2918,7 @@ struct ActiveWorkoutView: View {
                     startDate = Date().addingTimeInterval(-TimeInterval(pausedSeconds))
                     withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
                     updateLiveActivity()
+                    group?.setPaused(false, pausedSeconds: pausedSeconds, startDate: startDate)
                     WidgetCenter.shared.reloadAllTimelines()
                 }
             }
@@ -2920,12 +2927,16 @@ struct ActiveWorkoutView: View {
             secondsElapsed = Int(Date().timeIntervalSince(startDate))
             publishCloudActiveSession()
         }
+        .onReceive(group?.$room.eraseToAnyPublisher() ?? Empty<GroupRoomState?, Never>().eraseToAnyPublisher()) { room in
+            applyGroupRoomState(room)
+        }
         .onReceive(NotificationCenter.default.publisher(for: AppConstants.pauseSession)) { _ in
             Task { @MainActor in
                 isPaused = true
                 pausedSeconds = sharedPausedSeconds > 0 ? sharedPausedSeconds : secondsElapsed
                 withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
                 updateLiveActivity()
+                group?.setPaused(true, pausedSeconds: pausedSeconds, startDate: startDate)
                 WidgetCenter.shared.reloadAllTimelines()
             }
         }
@@ -2936,6 +2947,7 @@ struct ActiveWorkoutView: View {
                 pauseEndDate = nil; activePauseMinutes = nil
                 withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
                 updateLiveActivity()
+                group?.setPaused(false, pausedSeconds: pausedSeconds, startDate: startDate)
                 WidgetCenter.shared.reloadAllTimelines()
             }
         }
@@ -2953,15 +2965,15 @@ struct ActiveWorkoutView: View {
             }
             .frame(height: expandedHeight, alignment: .top)
             .frame(height: currentHeight, alignment: .top)
-            .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+            .clipShape(liveActivityBarShape)
             .glassEffect(
-                .regular.tint(.white.opacity(0.12)).interactive(),
-                in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                .regular.tint(.white.opacity(0.12)),
+                in: liveActivityBarShape
             )
-            .glassEffectID("sessionBar", in: liveActivityGlassNamespace)
         }
         .padding(.horizontal, cardHorizontalPadding)
         .padding(.bottom, cardBottomPadding)
+        .ignoresSafeArea(.container, edges: .bottom)
         .contentShape(Rectangle())
         .onTapGesture {
             if !isExpanded {
@@ -3116,6 +3128,44 @@ struct ActiveWorkoutView: View {
             }
         }
 
+        group?.setPaused(isPaused, pausedSeconds: pausedSeconds, startDate: startDate)
+        updateLiveActivity()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    // MARK: - SESSIONE DI GRUPPO: APPLICA STATO REMOTO
+
+    /// Applica lo stato della stanza condivisa (pausa/ripresa/fine decise dagli amici).
+    private func applyGroupRoomState(_ room: GroupRoomState?) {
+        guard group != nil, !isReleasedAfterTransfer else { return }
+        guard let room else { return }
+
+        if room.phase == .ended {
+            endSessionCleanly(notifyGroup: false)
+            return
+        }
+        guard room.phase == .running else { return }
+
+        let startChanged = abs(room.startDate.timeIntervalSince(startDate)) > 1.5
+        let pauseChanged = room.isPaused != isPaused
+        let pausedSecondsChanged = room.isPaused && room.pausedSeconds != pausedSeconds
+
+        guard pauseChanged || pausedSecondsChanged || (!room.isPaused && startChanged) else { return }
+
+        isPaused = room.isPaused
+        pausedSeconds = room.pausedSeconds
+        startDate = room.startDate
+        secondsElapsed = isPaused ? pausedSeconds : max(0, Int(Date().timeIntervalSince(startDate)))
+        pauseEndDate = nil
+        activePauseMinutes = nil
+
+        if pauseChanged {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }
+        withAnimation(fluidSpring) {
+            isExpanded = isPaused
+            targetHeight = isPaused ? expandedHeight : compactHeight
+        }
         updateLiveActivity()
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -3183,6 +3233,7 @@ struct ActiveWorkoutView: View {
         activePauseMinutes = minuti; pauseTotalSeconds = minuti * 60
         pauseRemainingSeconds = minuti * 60
         pauseEndDate = Date().addingTimeInterval(TimeInterval(minuti * 60))
+        group?.setPaused(true, pausedSeconds: pausedSeconds, startDate: startDate)
         updateLiveActivity()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         let content = UNMutableNotificationContent()
@@ -3205,6 +3256,11 @@ struct ActiveWorkoutView: View {
 
     // MARK: - SESSION LOGIC
     func restoreOrStartSession() {
+        if let group, let room = group.room {
+            adoptGroupSession(room)
+            return
+        }
+
         let defaults = UserDefaults(suiteName: "group.studioso")
         if defaults?.bool(forKey: "sharedSessionActive") == true,
            defaults?.string(forKey: "sharedCourseName") == course.name {
@@ -3222,6 +3278,42 @@ struct ActiveWorkoutView: View {
             else { requestNewLiveActivity() }
             publishCloudActiveSession(force: true)
         } else { startFreshSession() }
+    }
+
+    /// Adotta la sessione condivisa: il timer è quello deciso dalla stanza,
+    /// così tutti i partecipanti vedono lo stesso tempo.
+    private func adoptGroupSession(_ room: GroupRoomState) {
+        let sessionID = "group_\(room.code)"
+
+        isPaused = room.isPaused
+        pausedSeconds = room.pausedSeconds
+        startDate = room.startDate
+        secondsElapsed = room.isPaused ? room.pausedSeconds : max(0, Int(Date().timeIntervalSince(room.startDate)))
+        isExpanded = isPaused
+        targetHeight = isPaused ? expandedHeight : compactHeight
+
+        let defaults = UserDefaults(suiteName: "group.studioso")
+        defaults?.set(isPaused,                        forKey: "sharedIsPaused")
+        defaults?.set(pausedSeconds,                   forKey: "sharedPausedSeconds")
+        defaults?.set(startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+        defaults?.set(false,                           forKey: "sharedStopRequested")
+        defaults?.set("",                              forKey: "sharedStopSessionID")
+        defaults?.set(course.name,                     forKey: "sharedCourseName")
+        defaults?.set(sessionID,                       forKey: "sharedSessionID")
+        defaults?.set(true,                            forKey: "sharedSessionActive")
+
+        sharedIsPaused = isPaused
+        sharedPausedSeconds = pausedSeconds
+        sharedStartDate = startDate.timeIntervalSince1970
+        sharedStopRequested = false
+        sharedStopSessionID = ""
+        sharedCourseName = course.name
+        sharedSessionID = sessionID
+        sharedSessionActive = true
+
+        requestNewLiveActivity()
+        pushFullStateToWatch()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     func startFreshSession() {
@@ -3279,7 +3371,15 @@ struct ActiveWorkoutView: View {
         }
     }
 
-    func endSessionCleanly(finalMinutes: Int? = nil) {
+    func endSessionCleanly(finalMinutes: Int? = nil, notifyGroup: Bool = true) {
+        guard !isReleasedAfterTransfer else { return }
+        isReleasedAfterTransfer = true // evita doppie chiusure (tick, notifiche, gruppo)
+
+        if notifyGroup, let group {
+            let elapsed = secondsElapsed
+            Task { await group.endOrLeave(elapsedSeconds: elapsed) }
+        }
+
         Task { await liveActivity?.end(nil, dismissalPolicy: .immediate) }
         let defaults = UserDefaults(suiteName: "group.studioso")
         let sessionIDToClear = sharedSessionID.isEmpty ? defaults?.string(forKey: "sharedSessionID") : sharedSessionID
@@ -3301,17 +3401,52 @@ struct ActiveWorkoutView: View {
         sharedCourseName = ""
         sharedSessionID = ""
         onEnd(completedMinutes)
-        Task { await CloudSessionSync.shared.clearActiveSession(sessionID: sessionIDToClear) }
+        if group == nil {
+            Task { await CloudSessionSync.shared.clearActiveSession(sessionID: sessionIDToClear) }
+        }
         pushFullStateToWatch()
         WidgetCenter.shared.reloadTimelines(ofKind: "widgetstudio")
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    /// Un altro dispositivo ha preso possesso della sessione: chiudi la vista
+    /// senza salvare e senza toccare il record cloud (la sessione continua altrove).
+    private func releaseSessionAfterTransfer() {
+        guard !isReleasedAfterTransfer else { return }
+        isReleasedAfterTransfer = true
+
+        Task { await liveActivity?.end(nil, dismissalPolicy: .immediate) }
+        let defaults = UserDefaults(suiteName: "group.studioso")
+        defaults?.set(false, forKey: "sharedSessionActive")
+        defaults?.set(false, forKey: "sharedStopRequested")
+        defaults?.set("",    forKey: "sharedStopSessionID")
+        defaults?.set(false, forKey: "sharedIsPaused")
+        defaults?.set(0,     forKey: "sharedPausedSeconds")
+        defaults?.set(0,     forKey: "sharedStartDate")
+        defaults?.set("",    forKey: "sharedCourseName")
+        defaults?.set("",    forKey: "sharedSessionID")
+        sharedSessionActive = false
+        sharedStopRequested = false
+        sharedStopSessionID = ""
+        sharedIsPaused = false
+        sharedPausedSeconds = 0
+        sharedStartDate = 0
+        sharedCourseName = ""
+        sharedSessionID = ""
+
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        pushFullStateToWatch()
+        WidgetCenter.shared.reloadAllTimelines()
+        onTransferredAway?()
+    }
+
     private func publishCloudActiveSession(force: Bool = false) {
+        guard group == nil else { return } // le sessioni di gruppo non usano il record privato
+        guard !isReleasedAfterTransfer else { return }
         guard sharedSessionActive || AppConstants.sharedDefaults.bool(forKey: "sharedSessionActive") else { return }
         let sessionID = sharedSessionID.isEmpty ? AppConstants.sharedDefaults.string(forKey: "sharedSessionID") ?? UUID().uuidString : sharedSessionID
-        Task {
-            await CloudSessionSync.shared.publishActiveSession(
+        Task { @MainActor in
+            let outcome = await CloudSessionSync.shared.publishActiveSession(
                 sessionID: sessionID,
                 courseName: course.name,
                 startDate: startDate,
@@ -3319,6 +3454,9 @@ struct ActiveWorkoutView: View {
                 pausedSeconds: pausedSeconds,
                 force: force
             )
+            if outcome == .transferredAway {
+                releaseSessionAfterTransfer()
+            }
         }
     }
 
@@ -4819,7 +4957,7 @@ struct AppleStylePillSlider: View {
     }
 }
 
-// MARK: - END SESSION VIEW
+// MARK: - END SESSION VIEW (stile Apple: riepilogo tipo Fitness)
 struct EndSessionView: View {
     let course: StudyCourse
     let minutes: Int
@@ -4831,195 +4969,230 @@ struct EndSessionView: View {
     @State private var effort = 5
     @State private var concentration = 5
     @State private var satisfaction = 5
+    @FocusState private var focusedField: NoteField?
 
-    private var dynamicVividColor: Color {
-        let e = Double(effort)
-        let c = Double(concentration)
-        let s = Double(satisfaction)
-        let total = e + c + s
-        if total == 0 { return Color.blue }
-        let r = ((e * 0.1) + (c * 0.6) + (s * 0.05)) / total
-        let g = (0.9+(e * 0.6) + (c * 0.20) + (s * 0.10)) / total
-        let b = ((e * 0.10) + (c * 0.2) + (s * 0.60)) / total
-        let maxChannel = max(r, max(g, b))
-        let boost = maxChannel > 0 ? (1.0 / maxChannel) : 1.0
-        return Color(red: r * boost * 0.85, green: g * boost * 0.85, blue: b * boost * 0.85)
+    private enum NoteField { case topic, comment }
+
+    private var averageScore: Double {
+        Double(effort + concentration + satisfaction) / 3.0
     }
-
-    private var averageScore: Int { (effort + concentration + satisfaction) / 3 }
 
     private var formattedDuration: String {
         if minutes >= 60 {
             let h = minutes / 60; let m = minutes % 60
-            return m > 0 ? "\(h)h \(m)min" : "\(h)h"
+            return m > 0 ? "\(h) h \(m) min" : "\(h) h"
         }
         return "\(minutes) min"
     }
 
     var body: some View {
-        ZStack {
-
-            // MARK: SFONDO
-            LinearGradient(
-                colors: [
-                    dynamicVividColor.opacity(0.90),
-                    dynamicVividColor.opacity(0.85),
-                    dynamicVividColor.opacity(0.75)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.35), value: dynamicVividColor)
-
-            VStack(spacing: 0) {
-
-                // MARK: HEADER
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                    }
-                    .glassEffect(.regular.interactive(), in: Circle())
-
-                    Spacer()
-
-                    Text("Fine Sessione")
-                        .font(.headline.bold())
-                        .foregroundStyle(.white)
-
-                    Spacer()
-
-                    Button {
-                        onSave(topic, comment, effort, concentration, satisfaction)
-                        dismiss()
-                    } label: {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                    }
-                    .glassEffect(
-                        .regular.tint(dynamicVividColor.opacity(0.5)).interactive(),
-                        in: Circle()
-                    )
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    heroCard
+                    ratingsCard
+                    notesCard
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 30)
+            }
+            .background(Color(.systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Fine sessione")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annulla") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Salva") { save() }
+                        .fontWeight(.semibold)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    save()
+                } label: {
+                    Text("Salva sessione")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(course.color)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+                .background(.ultraThinMaterial)
+            }
+        }
+    }
 
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 14) {
+    private func save() {
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        onSave(topic, comment, effort, concentration, satisfaction)
+        dismiss()
+    }
 
-                        // MARK: CARD SOMMARIO
-                        HStack(spacing: 16) {
-                            // Icona corso
-                            ZStack {
-                                Image(systemName: course.icon)
-                                    .font(.system(size: 48, weight: .bold))
-                                    .foregroundStyle(.white)
-                            }
+    // MARK: Card riepilogo (materia + durata)
+    private var heroCard: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(course.color.gradient)
+                        .frame(width: 52, height: 52)
+                    Image(systemName: course.icon)
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(course.name)
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.white.opacity(0.75))
-                                Text(formattedDuration)
-                                    .font(.system(size: 38, weight: .bold, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(.white)
-                            }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(course.name)
+                        .font(.headline)
+                    Text(Date.now, format: .dateTime.weekday(.wide).day().month(.wide))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
 
-                            Spacer()
+            Divider()
 
-                           
-                            
-                        }
-                        .padding(20)
-                        .glassEffect(
-                            .regular,
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        )
-
-                        // MARK: CARD SLIDER
-                        VStack(spacing: 26) {
-                            AppleStylePillSlider(
-                                value: $effort,
-                                label: "Impegno",
-                                color: .green,
-                                icon: ""
-                                
-                            )
-                            // Divider glass
-                            Rectangle()
-                                .fill(Color.white.opacity(0.12))
-                                .frame(height: 1)
-                            AppleStylePillSlider(
-                                value: $concentration,
-                                label: "Concentrazione",
-                                color: .orange,
-                                icon: ""
-                            )
-                            Rectangle()
-                                .fill(Color.white.opacity(0.12))
-                                .frame(height: 1)
-                            AppleStylePillSlider(
-                                value: $satisfaction,
-                                label: "Soddisfazione",
-                                color: .blue,
-                                icon: ""
-                            )
-                        }
-                        .padding(22)
-                        .glassEffect(
-                            .regular,
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        )
-
-                        // MARK: CAMPO ARGOMENTO
-                        HStack(spacing: 10) {
-                            Image(systemName: "doc.text")
-                                .font(.callout.bold())
-                                .foregroundStyle(.white.opacity(0.6))
-                            TextField("Argomento trattato...", text: $topic)
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .tint(.white)
-                                
-                        }
-                        .padding(18)
-                            .glassEffect(
-                                .regular,
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            )
-                        
-
-                        // MARK: CAMPO NOTE
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "pencil")
-                                .font(.callout.bold())
-                                .foregroundStyle(.white.opacity(0.6))
-                                .padding(.top, 2)
-                            TextField("Note o commenti...", text: $comment, axis: .vertical)
-                                .lineLimit(3...6)
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .tint(.white)
-                        }
-                        .padding(18)
-                        .glassEffect(
-                            .regular,
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        )
-                        
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 20)
-                    .padding(.bottom, 50)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tempo di studio")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(formattedDuration)
+                        .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(course.color)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Voto medio")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.1f", averageScore))
+                        .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: averageScore)
                 }
             }
         }
-        .environment(\.colorScheme, .dark)
+        .padding(18)
+        .flatDashboardCard(cornerRadius: 22)
+    }
+
+    // MARK: Card valutazioni
+    private var ratingsCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("COM'È ANDATA")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+
+            VStack(spacing: 18) {
+                RatingSliderRow(value: $effort, label: "Impegno", icon: "flame.fill", color: .orange)
+                Divider()
+                RatingSliderRow(value: $concentration, label: "Concentrazione", icon: "brain.head.profile", color: .green)
+                Divider()
+                RatingSliderRow(value: $satisfaction, label: "Soddisfazione", icon: "hand.thumbsup.fill", color: .blue)
+            }
+            .padding(18)
+            .flatDashboardCard(cornerRadius: 22)
+        }
+    }
+
+    // MARK: Card note
+    private var notesCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("NOTE")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.text")
+                        .font(.callout)
+                        .foregroundStyle(course.color)
+                        .frame(width: 24)
+                    TextField("Argomento trattato", text: $topic)
+                        .font(.body)
+                        .focused($focusedField, equals: .topic)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .comment }
+                }
+                .padding(.vertical, 14)
+
+                Divider()
+
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "pencil")
+                        .font(.callout)
+                        .foregroundStyle(course.color)
+                        .frame(width: 24)
+                        .padding(.top, 2)
+                    TextField("Note o commenti", text: $comment, axis: .vertical)
+                        .font(.body)
+                        .lineLimit(3...6)
+                        .focused($focusedField, equals: .comment)
+                }
+                .padding(.vertical, 14)
+            }
+            .padding(.horizontal, 18)
+            .flatDashboardCard(cornerRadius: 22)
+        }
+    }
+}
+
+// MARK: - RIGA SLIDER VALUTAZIONE (adattiva chiaro/scuro)
+struct RatingSliderRow: View {
+    @Binding var value: Int
+    let label: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.subheadline)
+                    .foregroundStyle(color)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 22)
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("\(value)")
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+                    .foregroundStyle(color)
+                    .frame(minWidth: 34)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(color.opacity(0.14)))
+                    .contentTransition(.numericText())
+            }
+
+            Slider(
+                value: Binding(
+                    get: { Double(value) },
+                    set: { newValue in
+                        let rounded = Int(newValue.rounded())
+                        if rounded != value {
+                            value = rounded
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
+                    }
+                ),
+                in: 0...10,
+                step: 1
+            )
+            .tint(color)
+        }
     }
 }
 // MARK: - IMPOSTAZIONI
@@ -5076,6 +5249,7 @@ struct SettingsView: View {
                     )
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Impostazioni")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
@@ -5550,14 +5724,7 @@ struct StudySettingsView: View {
     @AppStorage("useAlternativeViews") private var useAlternativeViews = false
     @AppStorage("selectedBackgroundId") private var selectedBackgroundId = "noir"
     @State private var previewingBackground: AlternativeBackground? = nil
-    
-    // Configurazione Griglia a 3 colonne
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
-    
+
     var body: some View {
         Form {
             Section {
@@ -5571,16 +5738,11 @@ struct StudySettingsView: View {
 
             if useAlternativeViews {
                 Section {
-                    LazyVGrid(columns: columns, spacing: 16) {
-                        ForEach(AlternativeBackground.allBackgrounds) { background in
-                            backgroundButton(for: background)
-                        }
+                    ForEach(AlternativeBackground.allBackgrounds) { background in
+                        backgroundRow(for: background)
                     }
-                    .padding(.vertical, 8)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                 } header: {
-                    Text("I tuoi sfondi")
+                    Text("Sfondi")
                 } footer: {
                     Text("Ogni nuova medaglia ottenuta in Focus Mode sblocca automaticamente un nuovo sfondo per le sessioni.")
                 }
@@ -5593,58 +5755,66 @@ struct StudySettingsView: View {
         }
     }
 
-    private func backgroundButton(for background: AlternativeBackground) -> some View {
+    private func backgroundRow(for background: AlternativeBackground) -> some View {
         let isUnlocked = background.requiredMedalId == nil || (manager.medals.first(where: { $0.id == background.requiredMedalId })?.isUnlocked ?? false)
+        let isSelected = selectedBackgroundId == background.id
 
         return Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             previewingBackground = background
         } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                Color.clear
-                    .aspectRatio(1170.0 / 2532.0, contentMode: .fit)
-                    .overlay {
-                        if let imageName = background.imageName, isUnlocked {
-                            Image(imageName)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            background.color
-                        }
-                    }
-                    .overlay {
-                        if !isUnlocked {
-                            ZStack {
-                                Color.black.opacity(0.6)
-                                Image(systemName: "lock.fill")
-                                    .font(.title3)
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        if selectedBackgroundId == background.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.body)
-                                .foregroundStyle(.green)
-                                .background(Circle().fill(.white))
-                                .padding(6)
-                        }
-                    }
+            HStack(spacing: 12) {
+                backgroundThumbnail(for: background, isUnlocked: isUnlocked)
 
-                Text(background.name)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isUnlocked ? .primary : .secondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(background.name)
+                        .foregroundStyle(isUnlocked ? .primary : .secondary)
+                    Text(isUnlocked ? (isSelected ? "Selezionato" : "Tocca per anteprima") : "Bloccato")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
             }
+            .padding(.vertical, 2)
         }
         .buttonStyle(.plain)
         .disabled(!isUnlocked)
+    }
+
+    private func backgroundThumbnail(for background: AlternativeBackground, isUnlocked: Bool) -> some View {
+        Color.clear
+            .frame(width: 44, height: 58)
+            .overlay {
+                if let imageName = background.imageName, isUnlocked {
+                    Image(imageName)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    background.color
+                }
+            }
+            .overlay {
+                if !isUnlocked {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                        Image(systemName: "lock.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            }
     }
 }
 

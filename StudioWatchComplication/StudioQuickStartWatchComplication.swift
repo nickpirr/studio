@@ -13,11 +13,14 @@ struct StudioQuickStartWatchEntry: TimelineEntry {
     let date: Date
     let topCourseName: String
     let topCourseIcon: String
+    let topCourseColorName: String
+
+    var courseColor: Color { WatchPalette.color(from: topCourseColorName) }
 }
 
 struct StudioQuickStartWatchProvider: TimelineProvider {
     func placeholder(in context: Context) -> StudioQuickStartWatchEntry {
-        StudioQuickStartWatchEntry(date: Date(), topCourseName: "Matematica", topCourseIcon: "function")
+        StudioQuickStartWatchEntry(date: Date(), topCourseName: "Matematica", topCourseIcon: "function", topCourseColorName: "blue")
     }
     func getSnapshot(in context: Context, completion: @escaping (StudioQuickStartWatchEntry) -> Void) {
         completion(currentEntry())
@@ -30,9 +33,9 @@ struct StudioQuickStartWatchProvider: TimelineProvider {
         if let data = defaults?.data(forKey: WatchSync.keyCourses),
            let courses = try? JSONDecoder().decode([WatchCourseLite].self, from: data),
            let first = courses.first {
-            return StudioQuickStartWatchEntry(date: Date(), topCourseName: first.name, topCourseIcon: first.icon)
+            return StudioQuickStartWatchEntry(date: Date(), topCourseName: first.name, topCourseIcon: first.icon, topCourseColorName: first.colorName)
         }
-        return StudioQuickStartWatchEntry(date: Date(), topCourseName: "Studio", topCourseIcon: "book.fill")
+        return StudioQuickStartWatchEntry(date: Date(), topCourseName: "Studio", topCourseIcon: "book.fill", topCourseColorName: "blue")
     }
 }
 
@@ -41,11 +44,30 @@ struct StudioQuickStartWatchView: View {
 
     var body: some View {
         Button(intent: makeIntent()) {
-            HStack(spacing: 4) {
-                Image(systemName: entry.topCourseIcon)
-                Text(entry.topCourseName).font(.caption2).lineLimit(1)
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(entry.courseColor.gradient)
+                        .frame(width: 26, height: 26)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .widgetAccentable()
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Avvia")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(entry.topCourseName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(entry.courseColor)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
             }
         }
+        .buttonStyle(.plain)
         .containerBackground(for: .widget) { Color.clear }
     }
 

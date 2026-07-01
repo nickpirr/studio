@@ -28,6 +28,14 @@ struct WatchStartStudySessionIntent: AppIntent {
         defaults?.set(0, forKey: WatchSync.keyPausedSeconds)
         defaults?.set(false, forKey: WatchSync.keyStopRequested)
 
+        // Icona e colore per le complicazioni
+        if let data = defaults?.data(forKey: WatchSync.keyCourses),
+           let courses = try? JSONDecoder().decode([WatchCourseLite].self, from: data),
+           let course = courses.first(where: { $0.name == courseName }) {
+            defaults?.set(course.icon, forKey: WatchSync.keyCourseIcon)
+            defaults?.set(course.colorName, forKey: WatchSync.keyCourseColor)
+        }
+
         if WCSession.default.activationState != .activated { WCSession.default.activate() }
         if WCSession.default.activationState == .activated {
             let message: [String: Any] = ["action": "start", "courseName": courseName, "sessionID": newID, "startDate": now.timeIntervalSince1970]
