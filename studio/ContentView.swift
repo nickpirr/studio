@@ -1164,7 +1164,7 @@ struct ObiettiviView: View {
                     if !unlockedMedals.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Label("Sbloccate", systemImage: "trophy.fill")
-                                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                .font(.system(.title3, design: .rounded).weight(.bold))
                                 .foregroundStyle(LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing))
                                 .padding(.horizontal, 20)
 
@@ -1181,7 +1181,7 @@ struct ObiettiviView: View {
                     if !lockedMedals.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Label("Da sbloccare", systemImage: "lock.fill")
-                                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                                .font(.system(.title3, design: .rounded).weight(.bold))
                                 .foregroundColor(.secondary)
                                 .padding(.horizontal, 20)
 
@@ -2728,13 +2728,14 @@ struct ActiveWorkoutView: View {
     @AppStorage("sharedStopSessionID", store: UserDefaults(suiteName: "group.studioso")) var sharedStopSessionID = ""
 
     // MARK: - MOTORE TENDINA
-    let compactHeight: CGFloat = 70
-    let expandedHeight: CGFloat = 370
+    let compactHeight: CGFloat = 86
+    let expandedHeight: CGFloat = 520
 
-    @State private var targetHeight: CGFloat = 70
+    @State private var targetHeight: CGFloat = 86
     @State private var dragTranslation: CGFloat = 0
     @State private var isExpanded: Bool = false
     @State private var safeAreaBottom: CGFloat = 34
+    @Namespace private var liveActivityGlassNamespace
 
     var currentHeight: CGFloat {
         let h = targetHeight - dragTranslation
@@ -2748,9 +2749,18 @@ struct ActiveWorkoutView: View {
     }
 
     private var cardHorizontalPadding: CGFloat { 28 - 16 * expansionProgress }
-    private let screenCornerRadius: CGFloat = 44
-    private var cardCornerRadius: CGFloat { max(8, screenCornerRadius - cardHorizontalPadding) }
+    private let screenCornerRadius: CGFloat = 71
+    private var concentricCornerRadius: CGFloat { max(24, screenCornerRadius - cardHorizontalPadding) }
+    private var compactPillCornerRadius: CGFloat { compactHeight / 2 }
+    private var cardCornerRadius: CGFloat {
+        compactPillCornerRadius + (concentricCornerRadius - compactPillCornerRadius) * expansionProgress
+    }
     private var cardBottomPadding: CGFloat { cardHorizontalPadding - safeAreaBottom - 33 }
+    private var liveActivityGrabberHeight: CGFloat { 26 * expansionProgress }
+    private var headerHorizontalPadding: CGFloat { max(16, cardCornerRadius - 27) }
+    private var headerTopPadding: CGFloat { max(0, cardCornerRadius - 27 - liveActivityGrabberHeight) }
+    private var endSliderInset: CGFloat { max(16, cardCornerRadius - 41) }
+    private var courseIconCollapseProgress: CGFloat { min(1, expansionProgress * 3.2) }
 
     // MARK: - TIMER
     @State private var startDate: Date = Date()
@@ -2805,128 +2815,7 @@ struct ActiveWorkoutView: View {
             }
 
             // MARK: CARD LIQUID GLASS
-            VStack(spacing: 0) {
-
-                Capsule()
-                    .fill(.secondary.opacity(0.5))
-                    .frame(width: 36, height: 5 * expansionProgress)
-                    .padding(.top,    10 * expansionProgress)
-                    .padding(.bottom, 12 * expansionProgress)
-                    .opacity(Double(expansionProgress))
-
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(formatTime(secondsElapsed))
-                            .font(.system(size: 46, weight: .semibold, design: .rounded).monospacedDigit())
-                            .scaleEffect(0.70 + 0.30 * expansionProgress, anchor: .leading)
-                            .foregroundColor(isPaused ? .primary : .yellow)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.5)
-                            .frame(height: 46)
-
-                        Text(course.name.uppercased())
-                            .font(.system(size: 13, weight: .black, design: .rounded))
-                            .foregroundColor(course.color)
-                            .frame(height: 18 * expansionProgress)
-                            .opacity(Double(expansionProgress))
-                            .clipped()
-                    }
-
-                    Spacer()
-
-                    Button {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        isPaused.toggle()
-
-                        let defaults = UserDefaults(suiteName: "group.studioso")
-
-                        if isPaused {
-                            pausedSeconds = secondsElapsed
-                            withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
-
-                            defaults?.set(true, forKey: "sharedIsPaused")
-                            defaults?.set(pausedSeconds, forKey: "sharedPausedSeconds")
-
-                            if WCSession.default.activationState == .activated {
-                                WCSession.default.transferUserInfo(["action": "pause", "pausedSeconds": pausedSeconds])
-                            }
-                        } else {
-                            startDate = Date().addingTimeInterval(-TimeInterval(pausedSeconds))
-                            pauseEndDate = nil
-                            activePauseMinutes = nil
-                            withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
-
-                            defaults?.set(false, forKey: "sharedIsPaused")
-                            defaults?.set(startDate.timeIntervalSince1970, forKey: "sharedStartDate")
-
-                            if WCSession.default.activationState == .activated {
-                                WCSession.default.transferUserInfo([
-                                    "action": "resume",
-                                    "startDate": startDate.timeIntervalSince1970,
-                                    "pausedSeconds": pausedSeconds
-                                ])
-                            }
-                        }
-
-                        updateLiveActivity()
-                        WidgetCenter.shared.reloadAllTimelines()
-                    } label: {
-                        Image(systemName: isPaused ? "play.fill" : "pause.fill")
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 50, height: 50)
-                    }
-                    .glassEffect(.regular.interactive(), in: Circle())
-                }
-                .padding(.horizontal, 18)
-                .padding(.top,    10 * (1 - expansionProgress))
-                .padding(.bottom, 10 +  6 * expansionProgress)
-
-                VStack(spacing: 10) {
-                    pauseButton(minutes: 5,  icon: "cup.and.saucer.fill", label: "Pausa 5 minuti")
-                    pauseButton(minutes: 10, icon: "cup.and.saucer.fill", label: "Pausa 10 minuti")
-                    pauseButton(minutes: 15, icon: "cup.and.saucer.fill", label: "Pausa 15 minuti")
-
-                    SlideToEndSessionControl {
-                        endSessionCleanly()
-                    }
-                }
-                .padding(.horizontal, 16)
-                .opacity(Double(expansionProgress))
-
-                Spacer(minLength: 0)
-            }
-            .frame(height: expandedHeight, alignment: .top)
-            .frame(height: currentHeight,  alignment: .top)
-            .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
-            .glassEffect(
-                .regular.tint(.white.opacity(0.08)),
-                in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-            )
-            .padding(.horizontal, cardHorizontalPadding)
-            .padding(.bottom, cardBottomPadding)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                if !isExpanded {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
-                }
-            }
-            .gesture(
-                DragGesture(coordinateSpace: .global)
-                    .onChanged { value in dragTranslation = value.translation.height }
-                    .onEnded { value in
-                        let velocity = value.predictedEndTranslation.height
-                        let projected = targetHeight - value.translation.height - velocity * 0.2
-                        let threshold = (compactHeight + expandedHeight) / 2
-                        withAnimation(fluidSpring) {
-                            if projected > threshold { targetHeight = expandedHeight; isExpanded = true }
-                            else                     { targetHeight = compactHeight;  isExpanded = false }
-                            dragTranslation = 0
-                        }
-                    }
-            )
-            .environment(\.colorScheme, currentColorScheme)
+            liveActivityExpandableBar
 
             // MARK: SCREENSAVER ✅
             if isScreensaverActive {
@@ -2965,7 +2854,7 @@ struct ActiveWorkoutView: View {
                     .padding(.horizontal, 18)
                     .frame(height: compactHeight, alignment: .center)
                     .padding(.horizontal, 28)
-                    .padding(.bottom, 10) // card bottom è 5pt sotto il bordo fisico
+                    .padding(.bottom, 10) // allineato alla barra compatta
                 }
                 .ignoresSafeArea()
                 .zIndex(100)
@@ -3055,44 +2944,227 @@ struct ActiveWorkoutView: View {
         }
     }
 
+    private var liveActivityExpandableBar: some View {
+        GlassEffectContainer(spacing: 14) {
+            VStack(spacing: 0) {
+                liveActivityGrabber
+                liveActivityBarHeader
+                expandedPauseControls
+            }
+            .frame(height: expandedHeight, alignment: .top)
+            .frame(height: currentHeight, alignment: .top)
+            .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+            .glassEffect(
+                .regular.tint(.white.opacity(0.12)).interactive(),
+                in: RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+            )
+            .glassEffectID("sessionBar", in: liveActivityGlassNamespace)
+        }
+        .padding(.horizontal, cardHorizontalPadding)
+        .padding(.bottom, cardBottomPadding)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !isExpanded {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
+            }
+        }
+        .gesture(expandableBarDragGesture)
+        .environment(\.colorScheme, currentColorScheme)
+    }
+
+    private var liveActivityGrabber: some View {
+        Capsule()
+            .fill(.primary.opacity(Double(0.24 + 0.18 * expansionProgress)))
+            .frame(width: 42, height: 5 * expansionProgress)
+            .padding(.top, 9 * expansionProgress)
+            .padding(.bottom, 12 * expansionProgress)
+            .opacity(Double(expansionProgress))
+            .glassEffectID("grabber", in: liveActivityGlassNamespace)
+    }
+
+    private var liveActivityBarHeader: some View {
+        HStack(alignment: .center, spacing: 12 * (1 - expansionProgress)) {
+            liveActivityCourseIdentity
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(formatTime(secondsElapsed))
+                    .font(.system(size: 31 + 13 * expansionProgress, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(isPaused ? Color.primary : Color.yellow)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.56)
+                    .frame(height: 38 + 8 * expansionProgress, alignment: .leading)
+
+            }
+
+            Spacer(minLength: 4)
+            pauseResumeGlassButton
+        }
+        .padding(.horizontal, headerHorizontalPadding)
+        .padding(.top, headerTopPadding)
+        .padding(.bottom, 8 + 8 * expansionProgress)
+    }
+
+    private var liveActivityCourseIdentity: some View {
+        Image(systemName: course.icon)
+            .font(.system(size: 26, weight: .bold))
+            .foregroundStyle(course.color)
+            .frame(width: 54, height: 54)
+            .glassEffect(
+                .regular.tint(course.color.opacity(0.18)),
+                in: Circle()
+            )
+            .glassEffectID("courseIcon", in: liveActivityGlassNamespace)
+            .opacity(Double(1 - courseIconCollapseProgress))
+            .frame(width: 54 * (1 - expansionProgress), alignment: .leading)
+            .clipped()
+    }
+
+    private var pauseResumeGlassButton: some View {
+        Button {
+            togglePauseState()
+        } label: {
+            Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(isPaused ? .green : .primary)
+                .frame(width: 54, height: 54)
+        }
+        .glassEffect(
+            .regular.tint((isPaused ? Color.green : Color.white).opacity(0.16)).interactive(),
+            in: Circle()
+        )
+        .glassEffectID("pauseControl", in: liveActivityGlassNamespace)
+    }
+
+    private var expandedPauseControls: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Pausa")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.leading, max(0, headerHorizontalPadding - 8))
+
+                pauseButton(minutes: 5, icon: "cup.and.saucer.fill", label: "5 minuti")
+                pauseButton(minutes: 10, icon: "cup.and.saucer.fill", label: "10 minuti")
+                pauseButton(minutes: 15, icon: "cup.and.saucer.fill", label: "15 minuti")
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 14)
+
+            SlideToEndSessionControl {
+                endSessionCleanly()
+            }
+            .padding(.horizontal, endSliderInset)
+            .padding(.bottom, endSliderInset)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .opacity(Double(expansionProgress))
+        .offset(y: 18 * (1 - expansionProgress))
+        .allowsHitTesting(isExpanded)
+    }
+
+    private var expandableBarDragGesture: some Gesture {
+        DragGesture(coordinateSpace: .global)
+            .onChanged { value in dragTranslation = value.translation.height }
+            .onEnded { value in
+                let velocity = value.predictedEndTranslation.height
+                let projected = targetHeight - value.translation.height - velocity * 0.2
+                let threshold = (compactHeight + expandedHeight) / 2
+                withAnimation(fluidSpring) {
+                    if projected > threshold { targetHeight = expandedHeight; isExpanded = true }
+                    else                     { targetHeight = compactHeight;  isExpanded = false }
+                    dragTranslation = 0
+                }
+            }
+    }
+
+    private func togglePauseState() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        isPaused.toggle()
+
+        let defaults = UserDefaults(suiteName: "group.studioso")
+
+        if isPaused {
+            pausedSeconds = secondsElapsed
+            withAnimation(fluidSpring) { targetHeight = expandedHeight; isExpanded = true }
+
+            defaults?.set(true, forKey: "sharedIsPaused")
+            defaults?.set(pausedSeconds, forKey: "sharedPausedSeconds")
+
+            if WCSession.default.activationState == .activated {
+                WCSession.default.transferUserInfo(["action": "pause", "pausedSeconds": pausedSeconds])
+            }
+        } else {
+            startDate = Date().addingTimeInterval(-TimeInterval(pausedSeconds))
+            pauseEndDate = nil
+            activePauseMinutes = nil
+            withAnimation(fluidSpring) { targetHeight = compactHeight; isExpanded = false }
+
+            defaults?.set(false, forKey: "sharedIsPaused")
+            defaults?.set(startDate.timeIntervalSince1970, forKey: "sharedStartDate")
+
+            if WCSession.default.activationState == .activated {
+                WCSession.default.transferUserInfo([
+                    "action": "resume",
+                    "startDate": startDate.timeIntervalSince1970,
+                    "pausedSeconds": pausedSeconds
+                ])
+            }
+        }
+
+        updateLiveActivity()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
     // MARK: - PULSANTE PAUSA
     @ViewBuilder
     private func pauseButton(minutes: Int, icon: String, label: String) -> some View {
         let isActive = activePauseMinutes == minutes
-        let progress: Double = isActive && pauseTotalSeconds > 0
-            ? max(0, 1.0 - Double(pauseRemainingSeconds) / Double(pauseTotalSeconds)) : 0.0
+        let cornerRadius: CGFloat = 24
 
         Button { impostaPausaTimer(minuti: minutes) } label: {
             ZStack(alignment: .leading) {
-                if isActive {
-                    GeometryReader { geo in
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color.blue.opacity(0.35))
-                            .frame(width: geo.size.width * CGFloat(progress))
-                            .animation(.linear(duration: 0.9), value: progress)
-                    }
-                }
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     Image(systemName: isActive ? "timer" : icon)
-                    Text(label)
-                    Spacer()
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(isActive ? .white : .blue)
+                        .frame(width: 38, height: 38)
+                        .glassEffect(
+                            .regular.tint((isActive ? Color.blue : Color.white).opacity(isActive ? 0.28 : 0.10)),
+                            in: Circle()
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(label)
+                            .font(.system(.headline, design: .rounded).weight(.bold))
+                            .foregroundStyle(isActive ? .white : .blue)
+                        Text(isActive ? "Pausa attiva" : "Avvia pausa")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(isActive ? .white.opacity(0.72) : .secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
                     if isActive && pauseRemainingSeconds > 0 {
                         Text(formatPauseTime(pauseRemainingSeconds))
-                            .font(.system(.subheadline, design: .rounded).bold().monospacedDigit())
-                            .foregroundColor(.blue.opacity(0.9))
+                            .font(.system(.headline, design: .rounded).bold().monospacedDigit())
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
                     }
                 }
-                .font(.headline.bold())
-                .foregroundColor(.blue)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
             }
-            .frame(height: 52)
+            .frame(height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
+        .buttonStyle(.plain)
         .glassEffect(
-            .regular.tint(isActive ? .blue.opacity(0.25) : .blue.opacity(0.08)).interactive(),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .regular.tint(isActive ? .blue.opacity(0.24) : .white.opacity(0.08)).interactive(),
+            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         )
     }
 
@@ -3320,9 +3392,9 @@ struct SlideToEndSessionControl: View {
     @State private var dragOffset: CGFloat = 0
     @State private var didComplete = false
 
-    private let height: CGFloat = 58
-    private let thumbSize: CGFloat = 50
-    private let horizontalInset: CGFloat = 5
+    private let height: CGFloat = 82
+    private let thumbSize: CGFloat = 75
+    private let horizontalInset: CGFloat = 4
 
     var body: some View {
         GeometryReader { geometry in
@@ -3349,8 +3421,8 @@ struct SlideToEndSessionControl: View {
 
                 HStack(spacing: 6) {
                     Spacer(minLength: thumbSize + 12)
-                    Text(progress > 0.82 ? "rilascia per terminare" : "scorri per terminare la sessione")
-                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    Text(progress > 0.82 ? "Rilascia per terminare" : "Termina sessione")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
                         .foregroundStyle(Color.red.opacity(0.92))
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
@@ -3363,7 +3435,7 @@ struct SlideToEndSessionControl: View {
                     .frame(width: thumbSize, height: thumbSize)
                     .overlay(
                         Image(systemName: didComplete ? "checkmark" : "chevron.right")
-                            .font(.system(size: 18, weight: .black, design: .rounded))
+                            .font(.system(size: 30, weight: .black, design: .rounded))
                             .foregroundStyle(.white)
                     )
                     .shadow(color: Color.red.opacity(0.36), radius: 10, x: 0, y: 5)
