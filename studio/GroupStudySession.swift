@@ -27,9 +27,6 @@ struct GroupRoomState: Equatable {
     let code: String
     let hostID: String
     let hostName: String
-    let courseName: String
-    let courseIcon: String
-    let courseColorName: String
     var phase: Phase
     var isPaused: Bool
     var startDate: Date
@@ -38,8 +35,6 @@ struct GroupRoomState: Equatable {
     var lastEventAt: Date
 
     var isHostedByMe: Bool { hostID == CloudSessionSync.localDeviceID }
-
-    var courseColor: Color { Presets.color(from: courseColorName) }
 }
 
 // MARK: - ERRORI LEGGIBILI
@@ -72,7 +67,11 @@ final class GroupSessionController: ObservableObject {
     /// Nome mostrato agli amici (modificabile nelle viste di gruppo).
     @AppStorage("groupDisplayName") var displayName: String = ""
 
-    private let container = CKContainer.default()
+    /// Materia che QUESTO partecipante sta studiando: nella sessione condivisa
+    /// il timer è comune ma ognuno studia la propria materia.
+    @AppStorage("groupLocalCourseName") var localCourseName: String = ""
+
+    private let container = CloudConfig.container
     private var database: CKDatabase { container.publicCloudDatabase }
     private var pollTask: Task<Void, Never>?
 
@@ -88,7 +87,8 @@ final class GroupSessionController: ObservableObject {
     // MARK: - Creazione / ingresso
 
     /// Crea una stanza in fase "lobby" e ritorna il codice invito.
-    func createRoom(course: StudyCourse) async throws -> GroupRoomState {
+    /// La stanza non ha una materia: coordina solo il timer condiviso.
+    func createRoom() async throws -> GroupRoomState {
         isBusy = true
         defer { isBusy = false }
 
@@ -97,9 +97,6 @@ final class GroupSessionController: ObservableObject {
         record["code"] = code as CKRecordValue
         record["hostID"] = CloudSessionSync.localDeviceID as CKRecordValue
         record["hostName"] = effectiveDisplayName as CKRecordValue
-        record["courseName"] = course.name as CKRecordValue
-        record["courseIcon"] = course.icon as CKRecordValue
-        record["courseColorName"] = course.colorName as CKRecordValue
         record["phase"] = GroupRoomState.Phase.lobby.rawValue as CKRecordValue
         record["isPaused"] = 0 as CKRecordValue
         record["startDate"] = Date() as CKRecordValue
@@ -341,7 +338,6 @@ final class GroupSessionController: ObservableObject {
     private static func roomState(from record: CKRecord) -> GroupRoomState? {
         guard let code = record["code"] as? String,
               let hostID = record["hostID"] as? String,
-              let courseName = record["courseName"] as? String,
               let startDate = record["startDate"] as? Date
         else { return nil }
 
@@ -349,9 +345,6 @@ final class GroupSessionController: ObservableObject {
             code: code,
             hostID: hostID,
             hostName: record["hostName"] as? String ?? "Host",
-            courseName: courseName,
-            courseIcon: record["courseIcon"] as? String ?? "book.fill",
-            courseColorName: record["courseColorName"] as? String ?? "blue",
             phase: GroupRoomState.Phase(rawValue: record["phase"] as? Int ?? 0) ?? .lobby,
             isPaused: (record["isPaused"] as? Int ?? 0) == 1,
             startDate: startDate,

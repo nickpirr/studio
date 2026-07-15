@@ -15,6 +15,21 @@ import SwiftUI
 import UIKit
 import Combine
 
+// MARK: - CONTAINER CLOUDKIT CONDIVISO
+
+enum CloudConfig {
+    /// Identificatore esplicito del container (deve combaciare con
+    /// `com.apple.developer.icloud-container-identifiers` nelle entitlements).
+    /// Usare l'identificatore esplicito invece di `CKContainer.default()` evita
+    /// che, per differenze di risoluzione, l'app punti a un container sbagliato
+    /// e riporti l'account come "non disponibile".
+    static let containerIdentifier = "iCloud.Politecnico-di-milano.studioso"
+
+    static var container: CKContainer {
+        CKContainer(identifier: containerIdentifier)
+    }
+}
+
 // MARK: - SESSIONE ATTIVA SU CLOUD
 
 struct CloudActiveSession: Equatable, Identifiable {
@@ -130,7 +145,7 @@ final class CloudSessionSync: ObservableObject {
     @Published private(set) var isSyncingSessions = false
     @Published private(set) var lastSessionSyncAt: Date?
 
-    private let container = CKContainer.default()
+    private let container = CloudConfig.container
     private var database: CKDatabase { container.privateCloudDatabase }
 
     private let activeSessionRecordID = CKRecord.ID(recordName: "currentActiveSession")
@@ -149,32 +164,61 @@ final class CloudSessionSync: ObservableObject {
     private var isFullSyncRunning = false
     private var lastFullSyncAttempt: Date?
     private var ignoredRemoteSessionIDs: Set<String> = []
+    private var accountChangeObserver: NSObjectProtocol?
 
     private init() {
         syncedSessionIDs = Set(UserDefaults.standard.stringArray(forKey: syncedIDsKey) ?? [])
         tombstones = (UserDefaults.standard.dictionary(forKey: tombstonesKey) as? [String: Date]) ?? [:]
+
+        // Quando l'utente accede/esce da iCloud mentre l'app è aperta,
+        // il sistema notifica: riaggiorna subito lo stato dell'account.
+        accountChangeObserver = NotificationCenter.default.addObserver(
+            forName: .CKAccountChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refreshAccountStatus() }
+        }
     }
 
     // MARK: - Account
 
     func refreshAccountStatus() async {
-        accountState = .checking
-        let result = await cloudAccountStatus()
+        if accountState != .available { accountState = .checking }
 
-        switch result.status {
-        case .available:
-            accountState = .available
-            await refreshAccountIdentifier()
-        case .noAccount:
-            accountState = .noAccount
-        case .restricted:
-            accountState = .restricted
-        case .couldNotDetermine:
-            accountState = result.error.map { .unavailable($0.localizedDescription) } ?? .couldNotDetermine
-        case .temporarilyUnavailable:
-            accountState = .unavailable(result.error?.localizedDescription ?? "iCloud e temporaneamente non disponibile.")
-        @unknown default:
-            accountState = .couldNotDetermine
+        // Subito dopo il lancio l'account può risultare "non determinabile" o
+        // "temporaneamente non disponibile" mentre il demone CloudKit si avvia:
+        // riprova qualche volta prima di dichiarare un errore.
+        for attempt in 0..<3 {
+            let result = await cloudAccountStatus()
+
+            switch result.status {
+            case .available:
+                accountState = .available
+                await refreshAccountIdentifier()
+                return
+            case .noAccount:
+                accountState = .noAccount
+                return
+            case .restricted:
+                accountState = .restricted
+                return
+            case .couldNotDetermine, .temporarilyUnavailable:
+                // Transitorio: attendi e riprova (backoff breve).
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 800_000_000)
+                    continue
+                }
+                if result.status == .couldNotDetermine {
+                    accountState = result.error.map { .unavailable($0.localizedDescription) } ?? .couldNotDetermine
+                } else {
+                    accountState = .unavailable(result.error?.localizedDescription ?? "iCloud e temporaneamente non disponibile.")
+                }
+                return
+            @unknown default:
+                accountState = .couldNotDetermine
+                return
+            }
         }
     }
 

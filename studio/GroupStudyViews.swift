@@ -2,11 +2,15 @@
 //  GroupStudyViews.swift
 //  studio
 //
-//  UI delle sessioni di gruppo: crea una stanza con codice invito,
-//  unisciti a quella di un amico, lobby con partecipanti in tempo reale.
+//  UI delle sessioni di gruppo: crea una stanza con codice invito o unisciti
+//  a quella di un amico. La stanza coordina solo il TIMER condiviso — ognuno
+//  studia la propria materia, scelta personalmente nella lobby.
 //
 
 import SwiftUI
+
+// Accento neutro delle sessioni di gruppo (la stanza non ha una materia).
+private let groupAccent = Color.indigo
 
 // MARK: - SHEET PRINCIPALE
 
@@ -16,7 +20,6 @@ struct GroupStudySheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var joinCode = ""
-    @State private var showingCoursePicker = false
     @State private var errorMessage: String?
     @State private var isWorking = false
     @FocusState private var codeFieldFocused: Bool
@@ -25,7 +28,7 @@ struct GroupStudySheet: View {
         NavigationStack {
             Group {
                 if controller.room != nil {
-                    GroupLobbyView(controller: controller)
+                    GroupLobbyView(manager: manager, controller: controller)
                 } else {
                     startScreen
                 }
@@ -42,31 +45,30 @@ struct GroupStudySheet: View {
     }
 
     // MARK: Schermata iniziale
-
     private var startScreen: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 18) {
                 // Hero
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     ZStack {
                         Circle()
-                            .fill(Color.blue.gradient)
-                            .frame(width: 72, height: 72)
+                            .fill(groupAccent.gradient)
+                            .frame(width: 76, height: 76)
+                            .shadow(color: groupAccent.opacity(0.3), radius: 10, y: 4)
                         Image(systemName: "person.2.fill")
-                            .font(.system(size: 30, weight: .semibold))
+                            .font(.system(size: 32, weight: .semibold))
                             .foregroundStyle(.white)
                     }
                     Text("Sessioni condivise")
                         .font(.title3.bold())
-                    Text("Studiate insieme con lo stesso timer: se uno mette in pausa, la pausa vale per tutti.")
+                    Text("Un timer unico per tutti: se uno mette in pausa, la pausa vale per tutti. Ognuno studia la propria materia.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-                .flatDashboardCard(cornerRadius: 24)
+                .padding(.vertical, 26)
 
                 // Nome visibile agli amici
                 VStack(alignment: .leading, spacing: 8) {
@@ -79,22 +81,20 @@ struct GroupStudySheet: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color(.tertiarySystemFill))
+                                .fill(Color(.secondarySystemGroupedBackground))
                         )
                 }
-                .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .flatDashboardCard(cornerRadius: 24)
 
-                // Crea stanza
+                // Crea stanza (nessuna scelta materia: la stanza è solo il timer)
                 Button {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    showingCoursePicker = true
+                    createRoom()
                 } label: {
                     HStack(spacing: 14) {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 30))
-                            .foregroundStyle(.white, .blue)
+                            .foregroundStyle(.white, groupAccent)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Crea una stanza")
                                 .font(.headline)
@@ -104,26 +104,33 @@ struct GroupStudySheet: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.bold())
-                            .foregroundStyle(.tertiary)
+                        if isWorking {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.bold())
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     .padding(16)
-                    .flatDashboardCard(cornerRadius: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(Color(.secondarySystemGroupedBackground))
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(isWorking)
 
                 // Unisciti con codice
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 14) {
                         Image(systemName: "arrow.right.circle.fill")
                             .font(.system(size: 30))
-                            .foregroundStyle(.white, .green)
+                            .foregroundStyle(.white, .teal)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Unisciti a una stanza")
                                 .font(.headline)
-                            Text("Inserisci il codice ricevuto da un amico")
+                            Text("Inserisci il codice ricevuto")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -139,7 +146,7 @@ struct GroupStudySheet: View {
                             .padding(12)
                             .background(
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(Color(.tertiarySystemFill))
+                                    .fill(Color(.tertiarySystemGroupedBackground))
                             )
                             .onChange(of: joinCode) { _, newValue in
                                 let cleaned = GroupSessionController.normalizeCode(newValue)
@@ -159,7 +166,7 @@ struct GroupStudySheet: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.green)
+                        .tint(.teal)
                         .disabled(joinCode.count != 6 || isWorking)
                     }
 
@@ -171,7 +178,10 @@ struct GroupStudySheet: View {
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .flatDashboardCard(cornerRadius: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -179,22 +189,15 @@ struct GroupStudySheet: View {
         }
         .background(Color(.systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
-        .sheet(isPresented: $showingCoursePicker) {
-            GroupCoursePickerSheet(manager: manager) { course in
-                showingCoursePicker = false
-                createRoom(with: course)
-            }
-            .presentationDetents([.medium, .large])
-        }
     }
 
-    private func createRoom(with course: StudyCourse) {
+    private func createRoom() {
         isWorking = true
         errorMessage = nil
         Task { @MainActor in
             defer { isWorking = false }
             do {
-                _ = try await controller.createRoom(course: course)
+                _ = try await controller.createRoom()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -218,53 +221,10 @@ struct GroupStudySheet: View {
     }
 }
 
-// MARK: - PICKER MATERIA PER LA STANZA
-
-struct GroupCoursePickerSheet: View {
-    @ObservedObject var manager: StudyManager
-    var onPick: (StudyCourse) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List(manager.courses) { course in
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    onPick(course)
-                } label: {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(course.color.gradient)
-                                .frame(width: 38, height: 38)
-                            Image(systemName: course.icon)
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                        }
-                        Text(course.name)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.bold())
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .navigationTitle("Scegli la materia")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annulla") { dismiss() }
-                }
-            }
-        }
-    }
-}
-
 // MARK: - LOBBY
 
 struct GroupLobbyView: View {
+    @ObservedObject var manager: StudyManager
     @ObservedObject var controller: GroupSessionController
     @State private var isStarting = false
 
@@ -276,31 +236,44 @@ struct GroupLobbyView: View {
                 ProgressView()
             }
         }
-        .onAppear { controller.startPolling() }
+        .onAppear {
+            controller.startPolling()
+            ensureLocalCourseSelected()
+        }
         .onDisappear {
-            // Il polling continua solo se la sessione sta per partire/è in corso.
             if controller.room?.phase != .running { controller.stopPolling() }
         }
         .onChange(of: controller.room?.phase) { _, newPhase in
-            // L'host ha chiuso la stanza mentre eravamo in lobby: torna all'inizio.
             if newPhase == .ended { controller.clearRoomLocally() }
+        }
+    }
+
+    /// Materia personale selezionata (default: la prima materia).
+    private var selectedCourse: StudyCourse? {
+        manager.courses.first(where: { $0.name == controller.localCourseName }) ?? manager.courses.first
+    }
+
+    private func ensureLocalCourseSelected() {
+        if manager.courses.first(where: { $0.name == controller.localCourseName }) == nil {
+            controller.localCourseName = manager.courses.first?.name ?? ""
         }
     }
 
     private func lobbyContent(_ room: GroupRoomState) -> some View {
         ScrollView {
-            VStack(spacing: 16) {
-                // Materia
-                VStack(spacing: 10) {
+            VStack(spacing: 18) {
+                // Header stanza
+                VStack(spacing: 12) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(room.courseColor.gradient)
-                            .frame(width: 68, height: 68)
-                        Image(systemName: room.courseIcon)
-                            .font(.system(size: 30, weight: .semibold))
+                        Circle()
+                            .fill(groupAccent.gradient)
+                            .frame(width: 70, height: 70)
+                            .shadow(color: groupAccent.opacity(0.3), radius: 8, y: 3)
+                        Image(systemName: "person.2.wave.2.fill")
+                            .font(.system(size: 28, weight: .semibold))
                             .foregroundStyle(.white)
                     }
-                    Text(room.courseName)
+                    Text(room.isHostedByMe ? "La tua stanza" : "Stanza di \(room.hostName)")
                         .font(.title3.bold())
                     Text(room.isHostedByMe
                          ? "Condividi il codice: quando ci siete tutti, avvia la sessione."
@@ -308,14 +281,13 @@ struct GroupLobbyView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 22)
-                .flatDashboardCard(cornerRadius: 24)
 
                 // Codice invito
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     Text("CODICE INVITO")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -324,10 +296,10 @@ struct GroupLobbyView: View {
                         ForEach(Array(room.code.enumerated()), id: \.offset) { _, char in
                             Text(String(char))
                                 .font(.system(size: 28, weight: .bold, design: .monospaced))
-                                .frame(width: 42, height: 52)
+                                .frame(width: 42, height: 54)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color(.tertiarySystemFill))
+                                        .fill(Color(.tertiarySystemGroupedBackground))
                                 )
                         }
                     }
@@ -337,56 +309,20 @@ struct GroupLobbyView: View {
                             .font(.subheadline.weight(.semibold))
                     }
                     .buttonStyle(.bordered)
-                    .tint(room.courseColor)
+                    .tint(groupAccent)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 18)
-                .flatDashboardCard(cornerRadius: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color(.secondarySystemGroupedBackground))
+                )
 
-                // Partecipanti (aggiornati dal polling)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("PARTECIPANTI")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        HStack(spacing: 5) {
-                            Circle().fill(.green).frame(width: 7, height: 7)
-                            Text("\(room.participants.count)")
-                                .font(.caption.weight(.bold).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .contentTransition(.numericText())
-                        }
-                    }
+                // La materia di QUESTO partecipante
+                mySubjectCard
 
-                    ForEach(room.participants, id: \.self) { name in
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(room.courseColor.opacity(0.18))
-                                    .frame(width: 34, height: 34)
-                                Text(String(name.prefix(1)).uppercased())
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(room.courseColor)
-                            }
-                            Text(name)
-                                .font(.body.weight(.medium))
-                            if name == room.hostName {
-                                Text("HOST")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 7)
-                                    .padding(.vertical, 3)
-                                    .background(Capsule().fill(room.courseColor.opacity(0.16)))
-                                    .foregroundStyle(room.courseColor)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .flatDashboardCard(cornerRadius: 24)
-                .animation(.snappy, value: room.participants)
+                // Partecipanti
+                participantsCard(room)
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -394,48 +330,164 @@ struct GroupLobbyView: View {
         }
         .background(Color(.systemGroupedBackground))
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 10) {
-                if room.isHostedByMe {
-                    Button {
-                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-                        isStarting = true
-                        Task { @MainActor in
-                            await controller.startSessionForEveryone()
-                            isStarting = false
-                        }
-                    } label: {
-                        Group {
-                            if isStarting {
-                                ProgressView().tint(.white)
-                            } else {
-                                Label("Inizia per tutti", systemImage: "play.fill")
-                                    .font(.headline)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .tint(room.courseColor)
-                    .disabled(isStarting)
-                }
+            bottomBar(room)
+        }
+    }
 
-                Button(role: .destructive) {
+    // MARK: Card "la tua materia"
+    private var mySubjectCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("LA TUA MATERIA")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("solo per te")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if manager.courses.isEmpty {
+                Text("Aggiungi una materia per iniziare a studiare.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(manager.courses) { course in
+                            subjectChip(course)
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+    }
+
+    private func subjectChip(_ course: StudyCourse) -> some View {
+        let isSelected = selectedCourse?.id == course.id
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            controller.localCourseName = course.name
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: course.icon)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(isSelected ? .white : course.color)
+                Text(course.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSelected ? .white : .primary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(isSelected ? AnyShapeStyle(course.color.gradient) : AnyShapeStyle(Color(.tertiarySystemGroupedBackground)))
+            )
+        }
+        .buttonStyle(.plain)
+        .animation(.snappy, value: isSelected)
+    }
+
+    // MARK: Card partecipanti
+    private func participantsCard(_ room: GroupRoomState) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("PARTECIPANTI")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                HStack(spacing: 5) {
+                    Circle().fill(.green).frame(width: 7, height: 7)
+                    Text("\(room.participants.count)")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                }
+            }
+
+            ForEach(room.participants, id: \.self) { name in
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(groupAccent.opacity(0.18))
+                            .frame(width: 34, height: 34)
+                        Text(String(name.prefix(1)).uppercased())
+                            .font(.subheadline.bold())
+                            .foregroundStyle(groupAccent)
+                    }
+                    Text(name)
+                        .font(.body.weight(.medium))
+                    if name == room.hostName {
+                        Text("HOST")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(groupAccent.opacity(0.16)))
+                            .foregroundStyle(groupAccent)
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+        )
+        .animation(.snappy, value: room.participants)
+    }
+
+    // MARK: Barra inferiore
+    private func bottomBar(_ room: GroupRoomState) -> some View {
+        VStack(spacing: 10) {
+            if room.isHostedByMe {
+                Button {
+                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                    isStarting = true
                     Task { @MainActor in
-                        await controller.leaveLobby()
+                        await controller.startSessionForEveryone()
+                        isStarting = false
                     }
                 } label: {
-                    Text(room.isHostedByMe ? "Chiudi la stanza" : "Esci dalla stanza")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
+                    Group {
+                        if isStarting {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label("Inizia per tutti", systemImage: "play.fill")
+                                .font(.headline)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(groupAccent)
+                .disabled(isStarting || manager.courses.isEmpty)
             }
-            .padding(.horizontal)
-            .padding(.bottom, 8)
-            .background(.ultraThinMaterial)
+
+            Button(role: .destructive) {
+                Task { @MainActor in
+                    await controller.leaveLobby()
+                }
+            } label: {
+                Text(room.isHostedByMe ? "Chiudi la stanza" : "Esci dalla stanza")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
         }
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+        .background(.ultraThinMaterial)
     }
 }

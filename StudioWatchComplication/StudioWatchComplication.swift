@@ -107,76 +107,53 @@ struct StudioTimerView: View {
         }
     }
 
-    // MARK: Rettangolare
+    // MARK: Rettangolare (senza icona, solo testo colorato)
     private var rectangular: some View {
         Group {
             if entry.sessionActive {
-                HStack(spacing: 8) {
-                    // Tile colorato con l'icona della materia
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(entry.courseColor.gradient)
-                            .frame(width: 36, height: 36)
-                        Image(systemName: entry.courseIcon)
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .widgetAccentable()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(entry.courseName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(entry.courseColor)
+                        .lineLimit(1)
+                        .widgetAccentable()
 
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(entry.courseName)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(entry.courseColor)
-                            .lineLimit(1)
-
-                        if entry.isPaused {
-                            Text(pausedTimeText)
-                                .font(.system(.title3, design: .rounded).weight(.bold))
-                                .monospacedDigit()
-                                .foregroundStyle(.primary)
-                        } else {
-                            Text(entry.startDate, style: .timer)
-                                .font(.system(.title3, design: .rounded).weight(.bold))
-                                .monospacedDigit()
-                                .foregroundStyle(.primary)
-                        }
-
-                        HStack(spacing: 3) {
-                            Circle()
-                                .fill(entry.isPaused ? Color.orange : Color.green)
-                                .frame(width: 5, height: 5)
-                            Text(entry.isPaused ? "In pausa" : "In corso")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-            } else {
-                HStack(spacing: 8) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.blue.gradient)
-                            .frame(width: 36, height: 36)
-                        Image(systemName: "book.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .widgetAccentable()
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Studio")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.cyan)
-                        Text("Nessuna sessione")
-                            .font(.caption.weight(.semibold))
+                    if entry.isPaused {
+                        Text(pausedTimeText)
+                            .font(.system(.title, design: .rounded).weight(.bold))
+                            .monospacedDigit()
                             .foregroundStyle(.primary)
-                        Text("Oggi: \(formatShortMinutes(entry.todayMinutes))")
+                    } else {
+                        Text(entry.startDate, style: .timer)
+                            .font(.system(.title, design: .rounded).weight(.bold))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                    }
+
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(entry.isPaused ? Color.orange : Color.green)
+                            .frame(width: 5, height: 5)
+                        Text(entry.isPaused ? "In pausa" : "In corso")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
-                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Studio")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.cyan)
+                        .widgetAccentable()
+                    Text("Nessuna sessione")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("Oggi: \(formatShortMinutes(entry.todayMinutes))")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .containerBackground(for: .widget) { Color.clear }
@@ -325,15 +302,13 @@ struct StudioChartView: View {
 
     private var rectangular: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Settimana")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.cyan)
-                Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(totalText)
-                    .font(.system(.caption, design: .rounded).weight(.bold))
+                    .font(.system(.headline, design: .rounded).weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
+                    .widgetAccentable()
+                Spacer(minLength: 0)
             }
 
             let dayLabels = lastSevenDayInitials()

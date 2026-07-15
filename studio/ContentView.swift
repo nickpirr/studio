@@ -648,11 +648,13 @@ struct ContentView: View {
         }
         .onReceive(groupController.$room) { room in
             // Quando la stanza passa a "running", apri la sessione per tutti i partecipanti.
+            // Ognuno studia la PROPRIA materia (scelta nella lobby); il timer è condiviso.
             guard let room, room.phase == .running, activeGroupCourse == nil else { return }
             showingGroupSheet = false
 
-            let course = manager.courses.first(where: { $0.name == room.courseName })
-                ?? StudyCourse(name: room.courseName, icon: room.courseIcon, colorName: room.courseColorName)
+            let course = manager.courses.first(where: { $0.name == groupController.localCourseName })
+                ?? manager.courses.first
+                ?? StudyCourse(name: "Studio", icon: "book.fill", color: .blue)
             selectedCourse = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 activeGroupCourse = course
@@ -706,6 +708,7 @@ struct ContentView: View {
                 .onAppear {
                     checkPendingShortcut()
                     attemptToResumeSession()
+                    Task { await cloudSessionSync.refreshAccountStatus() }
                     refreshRemoteSessionBanner()
                     manager.syncCompletedSessionsFromCloud()
                     completePendingSessionIfNeeded()
@@ -2706,6 +2709,15 @@ struct AddCourseSheet: View {
 }
 
 // MARK: - SCHERMATA SESSIONE ATTIVA
+extension UIScreen {
+    /// Raggio degli angoli fisici del display, per geometrie concentriche.
+    /// Legge il valore reale del pannello; se non disponibile usa un fallback ragionevole.
+    var displayCornerRadius: CGFloat {
+        let key = ["_display", "Corner", "Radius"].joined()
+        return (value(forKey: key) as? CGFloat) ?? 59
+    }
+}
+
 struct ActiveWorkoutView: View {
     let course: StudyCourse
     var onEnd: (Int) -> Void
@@ -2749,7 +2761,12 @@ struct ActiveWorkoutView: View {
     }
 
     private var cardHorizontalPadding: CGFloat { 28 - 16 * expansionProgress }
-    private let expandedCardCornerRadius: CGFloat = 59
+    /// Raggio degli angoli fisici del display: la card espansa è inset di
+    /// `cardHorizontalPadding` dai bordi, quindi il raggio concentrico è
+    /// raggio schermo − inset (stessi centri di curvatura del vetro).
+    private var expandedCardCornerRadius: CGFloat {
+        max(24, UIScreen.main.displayCornerRadius - cardHorizontalPadding)
+    }
     private var compactPillCornerRadius: CGFloat { compactHeight / 2 }
     private var cardCornerRadius: CGFloat {
         compactPillCornerRadius + (expandedCardCornerRadius - compactPillCornerRadius) * expansionProgress
@@ -2762,6 +2779,10 @@ struct ActiveWorkoutView: View {
     private var headerHorizontalPadding: CGFloat { max(16, cardCornerRadius - 27) }
     private var headerTopPadding: CGFloat { max(0, cardCornerRadius - 27 - liveActivityGrabberHeight) }
     private var endSliderInset: CGFloat { max(16, cardHorizontalPadding) }
+    /// Raggio del controllo "termina sessione", concentrico agli angoli della card espansa.
+    private var endSliderCornerRadius: CGFloat {
+        max(18, expandedCardCornerRadius - endSliderInset)
+    }
     private var courseIconCollapseProgress: CGFloat { min(1, expansionProgress * 3.2) }
 
     // MARK: - TIMER
@@ -3067,7 +3088,7 @@ struct ActiveWorkoutView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 14)
 
-            SlideToEndSessionControl {
+            SlideToEndSessionControl(cornerRadius: endSliderCornerRadius) {
                 endSessionCleanly()
             }
             .padding(.horizontal, endSliderInset)
@@ -3525,6 +3546,8 @@ struct ActiveWorkoutView: View {
 }
 
 struct SlideToEndSessionControl: View {
+    /// Raggio degli angoli: passato dalla card espansa per restare concentrici.
+    var cornerRadius: CGFloat = 41
     var onComplete: () -> Void
 
     @State private var dragOffset: CGFloat = 0
@@ -3534,20 +3557,28 @@ struct SlideToEndSessionControl: View {
     private let thumbSize: CGFloat = 75
     private let horizontalInset: CGFloat = 4
 
+    private var trackShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: min(cornerRadius, height / 2), style: .continuous)
+    }
+    /// Il cursore è inset di `horizontalInset` dal binario: raggio concentrico.
+    private var thumbShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: max(12, min(cornerRadius, height / 2) - horizontalInset), style: .continuous)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let maxOffset = max(0, geometry.size.width - thumbSize - horizontalInset * 2)
             let progress = max(0, min(1, dragOffset / max(maxOffset, 1)))
 
             ZStack(alignment: .leading) {
-                Capsule()
+                trackShape
                     .fill(Color.red.opacity(0.13))
                     .overlay(
-                        Capsule()
+                        trackShape
                             .stroke(Color.red.opacity(0.30), lineWidth: 1)
                     )
 
-                Capsule()
+                trackShape
                     .fill(
                         LinearGradient(
                             colors: [Color.red.opacity(0.38), Color.red.opacity(0.20)],
@@ -3568,7 +3599,7 @@ struct SlideToEndSessionControl: View {
                 }
                 .opacity(Double(1 - progress * 0.45))
 
-                Circle()
+                thumbShape
                     .fill(Color.red)
                     .frame(width: thumbSize, height: thumbSize)
                     .overlay(
@@ -3608,7 +3639,7 @@ struct SlideToEndSessionControl: View {
             .frame(height: height)
             .glassEffect(
                 .regular.tint(.red.opacity(0.18)).interactive(),
-                in: Capsule()
+                in: trackShape
             )
         }
         .frame(height: height)
@@ -4869,95 +4900,7 @@ struct SlantedRoundedRect: Shape {
 }
 import SwiftUI
 
-// MARK: - SLIDER CORRETTO
-struct AppleStylePillSlider: View {
-    @Binding var value: Int
-    let label: String
-    let color: Color
-    let icon: String
-
-    private let stepCount = 5
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-
-            // Label + valore numerico
-            HStack {
-                Image(systemName: icon)
-                    .font(.system(.footnote, design: .rounded).bold())
-                    .foregroundColor(color)
-                Text(label)
-                    .font(.system(.callout, design: .rounded).bold())
-                    .foregroundColor(.white)
-                Spacer()
-                Text("\(value)/10")
-                    .font(.system(.callout, design: .rounded).bold().monospacedDigit())
-                    .foregroundColor(color)
-            }
-
-            GeometryReader { geo in
-                let thumbSize: CGFloat = 32
-                let trackHeight: CGFloat = 32
-                // ✅ trackWidth = spazio di viaggio effettivo del thumb
-                let trackWidth = geo.size.width - thumbSize
-                let step = trackWidth / CGFloat(stepCount)
-                let positionIndex = value / 2
-                let currentOffset = CGFloat(positionIndex) * step
-
-                ZStack(alignment: .leading) {
-
-                    // 1. Traccia sfondo
-                    Capsule()
-                        .fill(Color.white.opacity(0.15))
-                        .frame(height: trackHeight)
-
-                    // 2. Traccia colorata
-                    Capsule()
-                        .fill(color.opacity(0.85))
-                        .frame(width: thumbSize + currentOffset, height: trackHeight)
-                        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: value)
-
-                    // 3. ✅ PALLINI ALLINEATI PERFETTAMENTE:
-                    // Centro pallino i = i*step + thumbSize/2
-                    // = stesso del centro thumb alla posizione i
-                    // Leading edge pallino (6pt) = i*step + thumbSize/2 - 3
-                    ForEach(0...stepCount, id: \.self) { i in
-                        Circle()
-                            .fill(Color.white.opacity(i > positionIndex ? 0.55 : 0.0))
-                            .frame(width: 6, height: 6)
-                            .offset(x: CGFloat(i) * step + thumbSize / 2 - 3)
-                    }
-
-                    // 4. Thumb (sopra tutto)
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: thumbSize, height: thumbSize)
-                        .offset(x: currentOffset)
-                        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: value)
-                }
-                .frame(height: trackHeight)
-                .contentShape(Capsule())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { v in
-                            let adjustedX = v.location.x - thumbSize / 2
-                            let percent = adjustedX / trackWidth
-                            let snappedIndex = Int(round(percent * CGFloat(stepCount)))
-                            let clamped = max(0, min(stepCount, snappedIndex))
-                            let newValue = clamped * 2
-                            if newValue != value {
-                                value = newValue
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            }
-                        }
-                )
-            }
-            .frame(height: 32)
-        }
-    }
-}
-
-// MARK: - END SESSION VIEW (stile Apple: riepilogo tipo Fitness)
+// MARK: - END SESSION VIEW (sfondo gradiente dinamico + liquid glass)
 struct EndSessionView: View {
     let course: StudyCourse
     let minutes: Int
@@ -4977,6 +4920,19 @@ struct EndSessionView: View {
         Double(effort + concentration + satisfaction) / 3.0
     }
 
+    /// Colore vivido che reagisce alle valutazioni: lo sfondo cambia mentre valuti.
+    private var dynamicVividColor: Color {
+        let e = Double(effort), c = Double(concentration), s = Double(satisfaction)
+        let total = e + c + s
+        if total == 0 { return course.color }
+        let r = ((e * 0.10) + (c * 0.60) + (s * 0.05)) / total
+        let g = (0.9 + (e * 0.60) + (c * 0.20) + (s * 0.10)) / total
+        let b = ((e * 0.10) + (c * 0.20) + (s * 0.60)) / total
+        let maxChannel = max(r, max(g, b))
+        let boost = maxChannel > 0 ? (1.0 / maxChannel) : 1.0
+        return Color(red: r * boost * 0.85, green: g * boost * 0.85, blue: b * boost * 0.85)
+    }
+
     private var formattedDuration: String {
         if minutes >= 60 {
             let h = minutes / 60; let m = minutes % 60
@@ -4986,47 +4942,68 @@ struct EndSessionView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    heroCard
-                    ratingsCard
-                    notesCard
+        ZStack {
+            // Sfondo gradiente animato che segue i voti
+            LinearGradient(
+                colors: [
+                    dynamicVividColor.opacity(0.95),
+                    dynamicVividColor.opacity(0.82),
+                    dynamicVividColor.opacity(0.68)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.5), value: dynamicVividColor)
+
+            VStack(spacing: 0) {
+                header
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                        heroCard
+                        ratingsCard
+                        notesCard
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 14)
+                    .padding(.bottom, 44)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 30)
-            }
-            .background(Color(.systemGroupedBackground))
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Fine sessione")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annulla") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Salva") { save() }
-                        .fontWeight(.semibold)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                Button {
-                    save()
-                } label: {
-                    Text("Salva sessione")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(course.color)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
-                .background(.ultraThinMaterial)
+                .scrollDismissesKeyboard(.interactively)
             }
         }
+        .environment(\.colorScheme, .dark)
+    }
+
+    // MARK: Header con unico pulsante salva (in alto a destra)
+    private var header: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+            }
+            .glassEffect(.regular.interactive(), in: Circle())
+
+            Spacer()
+
+            Text("Fine sessione")
+                .font(.headline.bold())
+                .foregroundStyle(.white)
+
+            Spacer()
+
+            Button { save() } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+            }
+            .glassEffect(.regular.tint(.white.opacity(0.30)).interactive(), in: Circle())
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 
     private func save() {
@@ -5035,163 +5012,191 @@ struct EndSessionView: View {
         dismiss()
     }
 
-    // MARK: Card riepilogo (materia + durata)
+    // MARK: Card riepilogo (materia + durata + voto medio)
     private var heroCard: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(course.color.gradient)
-                        .frame(width: 52, height: 52)
-                    Image(systemName: course.icon)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+                Image(systemName: course.icon)
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 54, height: 54)
+                    .glassEffect(.regular.tint(.white.opacity(0.20)), in: Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(course.name)
                         .font(.headline)
+                        .foregroundStyle(.white)
                     Text(Date.now, format: .dateTime.weekday(.wide).day().month(.wide))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.72))
                 }
                 Spacer()
             }
 
-            Divider()
+            Rectangle().fill(Color.white.opacity(0.14)).frame(height: 1)
 
-            HStack {
+            HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tempo di studio")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.72))
                     Text(formattedDuration)
-                        .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(course.color)
+                        .font(.system(size: 38, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Voto medio")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.72))
                     Text(String(format: "%.1f", averageScore))
                         .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white)
                         .contentTransition(.numericText())
                         .animation(.snappy, value: averageScore)
                 }
             }
         }
-        .padding(18)
-        .flatDashboardCard(cornerRadius: 22)
+        .padding(20)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
-    // MARK: Card valutazioni
+    // MARK: Card valutazioni (slider glass)
     private var ratingsCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("COM'È ANDATA")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 6)
-
-            VStack(spacing: 18) {
-                RatingSliderRow(value: $effort, label: "Impegno", icon: "flame.fill", color: .orange)
-                Divider()
-                RatingSliderRow(value: $concentration, label: "Concentrazione", icon: "brain.head.profile", color: .green)
-                Divider()
-                RatingSliderRow(value: $satisfaction, label: "Soddisfazione", icon: "hand.thumbsup.fill", color: .blue)
-            }
-            .padding(18)
-            .flatDashboardCard(cornerRadius: 22)
+        VStack(spacing: 22) {
+            GlassRatingSlider(value: $effort, label: "Impegno", icon: "flame.fill", color: .orange)
+            GlassRatingSlider(value: $concentration, label: "Concentrazione", icon: "brain.head.profile", color: .mint)
+            GlassRatingSlider(value: $satisfaction, label: "Soddisfazione", icon: "hand.thumbsup.fill", color: .cyan)
         }
+        .padding(22)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
-    // MARK: Card note
+    // MARK: Card note (glass)
     private var notesCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("NOTE")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 6)
-
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "doc.text")
-                        .font(.callout)
-                        .foregroundStyle(course.color)
-                        .frame(width: 24)
-                    TextField("Argomento trattato", text: $topic)
-                        .font(.body)
-                        .focused($focusedField, equals: .topic)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .comment }
-                }
-                .padding(.vertical, 14)
-
-                Divider()
-
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "pencil")
-                        .font(.callout)
-                        .foregroundStyle(course.color)
-                        .frame(width: 24)
-                        .padding(.top, 2)
-                    TextField("Note o commenti", text: $comment, axis: .vertical)
-                        .font(.body)
-                        .lineLimit(3...6)
-                        .focused($focusedField, equals: .comment)
-                }
-                .padding(.vertical, 14)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text")
+                    .font(.callout.bold())
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(width: 24)
+                TextField("Argomento trattato", text: $topic)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .focused($focusedField, equals: .topic)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .comment }
             }
-            .padding(.horizontal, 18)
-            .flatDashboardCard(cornerRadius: 22)
+            .padding(.vertical, 15)
+
+            Rectangle().fill(Color.white.opacity(0.14)).frame(height: 1)
+
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "pencil")
+                    .font(.callout.bold())
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(width: 24)
+                    .padding(.top, 2)
+                TextField("Note o commenti", text: $comment, axis: .vertical)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .lineLimit(3...6)
+                    .focused($focusedField, equals: .comment)
+            }
+            .padding(.vertical, 15)
         }
+        .padding(.horizontal, 20)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 }
 
-// MARK: - RIGA SLIDER VALUTAZIONE (adattiva chiaro/scuro)
-struct RatingSliderRow: View {
+// MARK: - SLIDER VALUTAZIONE IN LIQUID GLASS (0–10)
+struct GlassRatingSlider: View {
     @Binding var value: Int
     let label: String
     let icon: String
     let color: Color
 
+    private let maxValue = 10
+    private let thumbSize: CGFloat = 30
+    private let trackHeight: CGFloat = 12
+
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.subheadline)
-                    .foregroundStyle(color)
-                    .symbolRenderingMode(.hierarchical)
-                    .frame(width: 22)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .glassEffect(.regular.tint(color.opacity(0.55)), in: Circle())
+
                 Text(label)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .font(.system(.callout, design: .rounded).weight(.bold))
+                    .foregroundStyle(.white)
+
                 Spacer()
+
                 Text("\(value)")
-                    .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundStyle(color)
-                    .frame(minWidth: 34)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(color.opacity(0.14)))
+                    .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 26)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .glassEffect(.regular.tint(color.opacity(0.40)), in: Capsule())
                     .contentTransition(.numericText())
             }
 
-            Slider(
-                value: Binding(
-                    get: { Double(value) },
-                    set: { newValue in
-                        let rounded = Int(newValue.rounded())
-                        if rounded != value {
-                            value = rounded
-                            UISelectionFeedbackGenerator().selectionChanged()
+            GeometryReader { geo in
+                let travel = max(1, geo.size.width - thumbSize)
+                let progress = CGFloat(value) / CGFloat(maxValue)
+                let thumbX = travel * progress
+
+                ZStack(alignment: .leading) {
+                    // Binario
+                    Capsule()
+                        .fill(Color.white.opacity(0.16))
+                        .frame(height: trackHeight)
+
+                    // Riempimento colorato
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.75), color],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: thumbX + thumbSize / 2, height: trackHeight)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: value)
+
+                    // Cursore glass
+                    Circle()
+                        .fill(.white)
+                        .frame(width: thumbSize, height: thumbSize)
+                        .overlay(Circle().stroke(color.opacity(0.45), lineWidth: 2))
+                        .shadow(color: .black.opacity(0.28), radius: 5, y: 2)
+                        .offset(x: thumbX)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: value)
+                }
+                .frame(height: thumbSize)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            let p = max(0, min(1, (v.location.x - thumbSize / 2) / travel))
+                            let newValue = Int((p * CGFloat(maxValue)).rounded())
+                            if newValue != value {
+                                value = newValue
+                                UISelectionFeedbackGenerator().selectionChanged()
+                            }
                         }
-                    }
-                ),
-                in: 0...10,
-                step: 1
-            )
-            .tint(color)
+                )
+            }
+            .frame(height: thumbSize)
         }
     }
 }
